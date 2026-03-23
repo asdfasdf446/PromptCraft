@@ -16,11 +16,17 @@ export default function CommandInput(props: Props) {
   const handleSubmit = (e: Event) => {
     e.preventDefault();
     const cmd = input().trim();
+
+    console.log('[CommandInput] 📥 Form submitted:', { input: cmd });
+
     if (cmd) {
       // Split by semicolon for batch commands
       const commands = cmd.split(';').map(c => c.trim()).filter(c => c.length > 0);
 
+      console.log('[CommandInput] 🔍 Parsed commands:', commands);
+
       if (commands.length === 0) {
+        console.warn('[CommandInput] ⚠️ No valid commands after parsing');
         showFeedback('No valid commands entered', 'error');
         return;
       }
@@ -34,12 +40,16 @@ export default function CommandInput(props: Props) {
       const invalidCommands = commands.filter(c => !validCommands.has(c));
 
       if (invalidCommands.length > 0) {
+        console.error('[CommandInput] ❌ Invalid commands detected:', invalidCommands);
         showFeedback(`Invalid command(s): ${invalidCommands.join(', ')}`, 'error');
         return;
       }
 
+      console.log('[CommandInput] ✅ All commands valid, submitting...');
+
       // Submit each command
       commands.forEach(command => {
+        console.log('[CommandInput] 📤 Submitting command:', command);
         props.onSubmit(command);
       });
 

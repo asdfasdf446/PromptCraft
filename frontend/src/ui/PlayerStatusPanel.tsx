@@ -8,9 +8,27 @@ export default function PlayerStatusPanel() {
     const state = worldState();
     const myUnitId = localStorage.getItem('myUnitId');
 
+    console.log('[PlayerStatusPanel] Update triggered:', {
+      hasState: !!state,
+      myUnitId: myUnitId,
+      unitCount: state?.units.length || 0
+    });
+
     if (state && myUnitId) {
       const unit = state.units.find(u => u.id === myUnitId);
-      setMyUnit(unit || null);
+
+      if (unit) {
+        console.log('[PlayerStatusPanel] ✅ Found my unit:', unit);
+        setMyUnit(unit);
+      } else {
+        console.warn('[PlayerStatusPanel] ⚠️ My unit not found in state. Available units:',
+          state.units.map(u => ({ id: u.id, name: u.name }))
+        );
+        setMyUnit(null);
+      }
+    } else {
+      console.log('[PlayerStatusPanel] ⏳ Waiting for state or unit ID');
+      setMyUnit(null);
     }
   });
 

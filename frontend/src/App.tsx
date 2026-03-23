@@ -10,21 +10,43 @@ export default function App() {
   const [selectedUnit, setSelectedUnit] = createSignal<any>(null);
 
   onMount(() => {
+    console.log('[App] 🚀 Application mounted, connecting WebSocket...');
     connectWebSocket();
   });
 
   const handleCommand = (cmd: string) => {
-    const myUnit = worldState()?.units.find(u => u.id === localStorage.getItem('myUnitId'));
+    const myUnitId = localStorage.getItem('myUnitId');
+    const myUnit = worldState()?.units.find(u => u.id === myUnitId);
+
+    console.log('[App] 📝 Command submitted:', {
+      command: cmd,
+      myUnitId: myUnitId,
+      foundUnit: !!myUnit
+    });
+
     if (myUnit) {
       sendCommand(cmd, myUnit.id);
+    } else {
+      console.error('[App] ❌ Cannot send command - my unit not found');
     }
   };
 
   const handleUnitClick = (unit: any) => {
-    // Don't open modal for own unit (it's already in fixed panel)
     const myUnitId = localStorage.getItem('myUnitId');
+
+    console.log('[App] 🖱️ Unit clicked:', {
+      clickedUnitId: unit.id,
+      clickedUnitName: unit.name,
+      myUnitId: myUnitId,
+      isMyUnit: unit.id === myUnitId
+    });
+
+    // Don't open modal for own unit (it's already in fixed panel)
     if (unit.id !== myUnitId) {
+      console.log('[App] 📋 Opening modal for other player');
       setSelectedUnit(unit);
+    } else {
+      console.log('[App] ⏭️ Skipping modal for own unit');
     }
   };
 

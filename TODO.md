@@ -37,3 +37,58 @@
 # Future Enhancements
 (Add new tasks below as needed)
 
+## ✅ Debug Logging Added
+Comprehensive debug logging has been added throughout the frontend. Open F12 console to see:
+
+### WebSocket Client Logs:
+- `[WebSocket]` Connection status, messages, errors
+- `📨` Received messages with full data
+- `📊` World state updates with tick and unit count
+- `🎮` Player unit ID assignment
+- `👤` Player unit status on each update
+- `📤` Outgoing commands with payload
+- `⚠️` Warnings when unit not found
+
+### App Component Logs:
+- `[App]` Application lifecycle events
+- `🖱️` Unit click events with identification check
+- `📝` Command submissions with unit lookup
+- `📋` Modal open/close decisions
+
+### PlayerStatusPanel Logs:
+- `[PlayerStatusPanel]` Update triggers and state checks
+- `✅` Successful unit lookup
+- `⚠️` Unit not found warnings with available units list
+- `⏳` Waiting for connection status
+
+### CommandInput Logs:
+- `[CommandInput]` Form submissions
+- `🔍` Command parsing results
+- `✅` Validation success
+- `❌` Validation failures with details
+- `📤` Individual command submissions
+
+**Instructions:** When reporting bugs, open F12 console, reproduce the issue, and copy all relevant logs to TODO.md below this section.
+
+---
+
+## ✅ Fixed: localStorage Unit ID Mismatch
+
+**Root Cause Identified from Logs:**
+- Stored unit ID: `8f2b71d4-411f-45bf-bdc7-914c2a572639` (from previous session)
+- Actual unit ID in world: `e115f0ae-2efd-458d-b776-a35c2f8a8d2f` (different player)
+- The old localStorage ID persisted across page refreshes, causing unit lookup failures
+
+**Fix Applied:**
+- Clear localStorage unit ID at the start of each WebSocket connection
+- This ensures a fresh unit is spawned and properly identified on each page load
+- Added log: `🗑️ Cleared old unit ID from localStorage`
+
+**Result:**
+- Player status panel will now show correct unit info instead of "Connecting..."
+- Commands will be sent to the correct unit
+- Clicking own unit will no longer open a modal (proper identification)
+
+**Test:** Refresh the page and check console for the new log showing unit ID being cleared and reassigned.
+
+---
