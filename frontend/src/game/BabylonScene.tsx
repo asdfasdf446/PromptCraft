@@ -9,7 +9,8 @@ import {
   StandardMaterial,
   Color3,
   Mesh,
-  PointerEventTypes
+  PointerEventTypes,
+  DynamicTexture
 } from '@babylonjs/core';
 import { worldState, UnitState } from '../network/WebSocketClient';
 
@@ -60,6 +61,45 @@ export default function BabylonScene(props: Props) {
         tile.material = mat;
       }
     }
+
+    // Create compass markers outside the grid
+    const createDirectionMarker = (text: string, position: Vector3, color: Color3) => {
+      const marker = MeshBuilder.CreateBox(`marker_${text}`, { width: 2, height: 0.5, depth: 2 }, scene);
+      marker.position = position;
+      const mat = new StandardMaterial(`markerMat_${text}`, scene);
+      mat.diffuseColor = color;
+      mat.emissiveColor = color.scale(0.3);
+      marker.material = mat;
+
+      // Add text label with larger texture
+      const plane = MeshBuilder.CreatePlane(`label_${text}`, { width: 5, height: 2 }, scene);
+      plane.position = new Vector3(position.x, position.y + 1.5, position.z);
+      plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+
+      const texture = new DynamicTexture(`labelTexture_${text}`, { width: 1024, height: 256 }, scene);
+      const textMat = new StandardMaterial(`labelMat_${text}`, scene);
+      textMat.diffuseTexture = texture;
+      textMat.emissiveColor = new Color3(1, 1, 1);
+      textMat.backFaceCulling = false;
+      plane.material = textMat;
+
+      const ctx = texture.getContext();
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 100px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text.toUpperCase(), 512, 128);
+      texture.update();
+    };
+
+    // North (negative Z) - Blue
+    createDirectionMarker('North (Up)', new Vector3(15, 0.3, -3), new Color3(0.3, 0.5, 1));
+    // South (positive Z) - Red
+    createDirectionMarker('South (Down)', new Vector3(15, 0.3, 33), new Color3(1, 0.3, 0.3));
+    // West (negative X) - Green
+    createDirectionMarker('West (Left)', new Vector3(-3, 0.3, 15), new Color3(0.3, 1, 0.5));
+    // East (positive X) - Yellow
+    createDirectionMarker('East (Right)', new Vector3(33, 0.3, 15), new Color3(1, 1, 0.3));
 
     // Pointer events for unit clicking
     scene.onPointerObservable.add((pointerInfo) => {

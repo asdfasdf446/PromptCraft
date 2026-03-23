@@ -6,6 +6,8 @@ interface Props {
 }
 
 export default function UnitPanel(props: Props) {
+  const isMyUnit = () => props.unit.id === localStorage.getItem('myUnitId');
+
   return (
     <div style={{
       position: 'absolute',
@@ -40,18 +42,27 @@ export default function UnitPanel(props: Props) {
         <div><strong>Position:</strong> ({props.unit.x}, {props.unit.y})</div>
         <div><strong>HP:</strong> {props.unit.hp} / 10</div>
         <div><strong>Qi:</strong> {props.unit.qi} / 10</div>
-        <div style={{ 'margin-top': '10px' }}>
-          <strong>Action Queue:</strong>
-          {props.unit.action_queue.length === 0 ? (
-            <div style={{ color: '#888', 'font-style': 'italic' }}>Empty</div>
-          ) : (
-            <ul style={{ 'margin-left': '20px', 'margin-top': '5px' }}>
-              {props.unit.action_queue.map((cmd, i) => (
-                <li key={i}>{cmd}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+
+        {isMyUnit() && (
+          <div style={{ 'margin-top': '10px' }}>
+            <strong>Action Queue:</strong>
+            {props.unit.action_queue.length === 0 ? (
+              <div style={{ color: '#888', 'font-style': 'italic' }}>Empty</div>
+            ) : (
+              <ul style={{ 'margin-left': '20px', 'margin-top': '5px' }}>
+                {props.unit.action_queue.map((cmd, i) => (
+                  <li key={i}>{cmd}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {!isMyUnit() && (
+          <div style={{ 'margin-top': '10px', color: '#888', 'font-style': 'italic' }}>
+            Action queue hidden for other players
+          </div>
+        )}
       </div>
     </div>
   );

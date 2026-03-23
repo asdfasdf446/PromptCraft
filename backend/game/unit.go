@@ -1,5 +1,7 @@
 package game
 
+import "sync"
+
 type Unit struct {
 	ID          string
 	Name        string
@@ -9,6 +11,7 @@ type Unit struct {
 	Qi          int
 	Attack      int
 	ActionQueue []string
+	mu          sync.Mutex
 }
 
 func NewUnit(id, name string, x, y int) *Unit {
@@ -35,6 +38,8 @@ func (u *Unit) EnqueueCommand(cmd string) bool {
 		return false
 	}
 
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.ActionQueue = append(u.ActionQueue, cmd)
 	return true
 }

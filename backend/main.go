@@ -87,10 +87,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Enqueue command
-		if unit, ok := world.Units[unitID]; ok {
-			if !unit.EnqueueCommand(cmd.Command) {
-				conn.WriteJSON(map[string]string{"error": "指令错误"})
-			}
+		if world.EnqueueCommandForUnit(unitID, cmd.Command) {
+			log.Printf("Player %s queued command: %s\n", playerName, cmd.Command)
+			// Broadcast updated state immediately so UI reflects the queue
+			broadcastWorldState()
+		} else {
+			conn.WriteJSON(map[string]string{"error": "指令错误"})
 		}
 	}
 

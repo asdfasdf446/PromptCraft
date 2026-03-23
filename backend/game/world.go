@@ -196,3 +196,15 @@ func isMoveCommand(cmd string) bool {
 func isAttackCommand(cmd string) bool {
 	return cmd == "attack_up" || cmd == "attack_down" || cmd == "attack_left" || cmd == "attack_right"
 }
+
+func (w *World) EnqueueCommandForUnit(unitID, cmd string) bool {
+	w.mu.RLock()
+	unit, ok := w.Units[unitID]
+	w.mu.RUnlock()
+
+	if !ok {
+		return false
+	}
+
+	return unit.EnqueueCommand(cmd)
+}

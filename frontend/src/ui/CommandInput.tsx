@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createSignal, Show, onCleanup } from 'solid-js';
 
 interface Props {
   onSubmit: (command: string) => void;
@@ -6,12 +6,44 @@ interface Props {
 
 export default function CommandInput(props: Props) {
   const [input, setInput] = createSignal('');
+  const [feedback, setFeedback] = createSignal<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showFeedback = (message: string, type: 'success' | 'error') => {
+    setFeedback({ message, type });
+    setTimeout(() => setFeedback(null), 3000);
+  };
 
   const handleSubmit = (e: Event) => {
     e.preventDefault();
     const cmd = input().trim();
     if (cmd) {
-      props.onSubmit(cmd);
+      // Split by semicolon for batch commands
+      const commands = cmd.split(';').map(c => c.trim()).filter(c => c.length > 0);
+
+      if (commands.length === 0) {
+        showFeedback('No valid commands entered', 'error');
+        return;
+      }
+
+      // Validate commands
+      const validCommands = new Set([
+        'move_up', 'move_down', 'move_left', 'move_right',
+        'attack_up', 'attack_down', 'attack_left', 'attack_right'
+      ]);
+
+      const invalidCommands = commands.filter(c => !validCommands.has(c));
+
+      if (invalidCommands.length > 0) {
+        showFeedback(`Invalid command(s): ${invalidCommands.join(', ')}`, 'error');
+        return;
+      }
+
+      // Submit each command
+      commands.forEach(command => {
+        props.onSubmit(command);
+      });
+
+      showFeedback(`${commands.length} command(s) queued`, 'success');
       setInput('');
     }
   };
@@ -24,12 +56,31 @@ export default function CommandInput(props: Props) {
       transform: 'translateX(-50%)',
       'z-index': '1000'
     }}>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '10px' }}>
+      <Show when={feedback()}>
+        <div style={{
+          position: 'absolute',
+          bottom: '70px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          padding: '8px 16px',
+          'border-radius': '4px',
+          background: feedback()!.type === 'success' ? '#2d5f2d' : '#5f2d2d',
+          border: `2px solid ${feedback()!.type === 'success' ? '#4a9e4a' : '#9e4a4a'}`,
+          color: '#fff',
+          'font-family': 'Courier New, monospace',
+          'font-size': '12px',
+          'white-space': 'nowrap'
+        }}>
+          {feedback()!.message}
+        </div>
+      </Show>
+
+      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '10px', 'flex-direction': 'column', 'align-items': 'center' }}>
         <input
           type="text"
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}
-          placeholder="Enter command (e.g., move_up, attack_down)"
+          placeholder="Enter commands (use ; for batch, e.g., move_up;attack_down)"
           style={{
             padding: '10px 20px',
             'font-size': '14px',
@@ -38,7 +89,7 @@ export default function CommandInput(props: Props) {
             border: '2px solid #4a4a4a',
             color: '#fff',
             'border-radius': '4px',
-            width: '400px',
+            width: '500px',
             outline: 'none'
           }}
         />
