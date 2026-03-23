@@ -5,6 +5,7 @@ import "sync"
 type Unit struct {
 	ID          string
 	Name        string
+	Model       string
 	X           int
 	Y           int
 	HP          int
@@ -14,10 +15,11 @@ type Unit struct {
 	mu          sync.Mutex
 }
 
-func NewUnit(id, name string, x, y int) *Unit {
+func NewUnit(id, name, model string, x, y int) *Unit {
 	return &Unit{
 		ID:          id,
 		Name:        name,
+		Model:       model,
 		X:           x,
 		Y:           y,
 		HP:          10,

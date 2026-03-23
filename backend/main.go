@@ -37,12 +37,21 @@ type UnitState struct {
 	HP          int      `json:"hp"`
 	Qi          int      `json:"qi"`
 	Name        string   `json:"name"`
+	Model       string   `json:"model"`
 	ActionQueue []string `json:"action_queue"`
 }
 
+type ActionEvent struct {
+	UnitID string `json:"unit_id"`
+	Action string `json:"action"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+}
+
 type ServerWorldState struct {
-	Units []UnitState `json:"units"`
-	Tick  int64       `json:"tick"`
+	Units   []UnitState   `json:"units"`
+	Tick    int64         `json:"tick"`
+	Actions []ActionEvent `json:"actions,omitempty"`
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +123,16 @@ func broadcastWorldState() {
 		Tick:  world.Tick,
 	}
 
+	// Add actions from last tick
+	for _, action := range world.LastActions {
+		state.Actions = append(state.Actions, ActionEvent{
+			UnitID: action.UnitID,
+			Action: action.Action,
+			X:      action.X,
+			Y:      action.Y,
+		})
+	}
+
 	for _, unit := range world.Units {
 		state.Units = append(state.Units, UnitState{
 			ID:          unit.ID,
@@ -122,6 +141,7 @@ func broadcastWorldState() {
 			HP:          unit.HP,
 			Qi:          unit.Qi,
 			Name:        unit.Name,
+			Model:       unit.Model,
 			ActionQueue: unit.ActionQueue,
 		})
 	}

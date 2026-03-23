@@ -7,12 +7,21 @@ export interface UnitState {
   hp: number;
   qi: number;
   name: string;
+  model: string;
   action_queue: string[];
+}
+
+export interface ActionEvent {
+  unit_id: string;
+  action: string;
+  x: number;
+  y: number;
 }
 
 export interface WorldState {
   units: UnitState[];
   tick: number;
+  actions?: ActionEvent[];
 }
 
 const [worldState, setWorldState] = createSignal<WorldState | null>(null);
@@ -52,8 +61,18 @@ export function connectWebSocket() {
       console.log('[WebSocket] 📊 World state update:', {
         tick: data.tick,
         unitCount: data.units?.length || 0,
-        units: data.units
+        units: data.units,
+        actionCount: data.actions?.length || 0
       });
+
+      // Log action events
+      if (data.actions && data.actions.length > 0) {
+        console.log('[WebSocket] ⚡ Action events:', data.actions);
+        data.actions.forEach((action: ActionEvent) => {
+          const unit = data.units?.find((u: UnitState) => u.id === action.unit_id);
+          console.log(`[Action] ${unit?.name || action.unit_id} executed ${action.action} at (${action.x}, ${action.y})`);
+        });
+      }
 
       setWorldState(data);
 
