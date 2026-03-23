@@ -1,14 +1,29 @@
 # PromptCraft
 
-A text-controlled sandbox survival and combat game played entirely through typed commands — no mouse, no keyboard shortcuts, just text.
+A text-controlled multiplayer survival and combat game with 3D graphics, played entirely through typed commands — no mouse, no keyboard shortcuts, just text.
 
 ---
 
-## Concept
+## Overview
 
-PromptCraft is a multiplayer web game set on a 2D grid world. Every action — moving, attacking, building — is issued as a text command. A resource called **qi (气)** gates how many actions you can queue. The world ticks every 5 seconds, executing all queued commands in priority order.
+PromptCraft is a functional multiplayer web game set on a 30×30 grid world rendered in 3D. Every action — moving, attacking — is issued as a text command. A resource called **qi (气)** gates how many actions you can queue. The world ticks every 5 seconds, executing all queued commands in priority order.
 
-The game is designed to be scriptable: all commands are exposed as an API, so players can write programs to automate their units.
+The game is designed to be scriptable: all commands are exposed via WebSocket API, so players can write programs to automate their units.
+
+**Current Status**: Fully functional multiplayer game with 3D graphics, terrain variety, and real-time WebSocket synchronization.
+
+---
+
+## Features
+
+- **3D Graphics**: Low-poly 3D models rendered with Babylon.js (WebGL2)
+- **15 Animal Characters**: Bunny, cat, dog, elephant, fish, giraffe, lion, monkey, pig, tiger, and more
+- **Procedural Terrain**: Varied terrain with grass, paths, rocks, bushes, and flowers
+- **Multiplayer**: Real-time synchronization via WebSocket (up to 10 players)
+- **Command Queue System**: Queue multiple actions, edit before execution
+- **Qi Resource System**: 10 qi max, regenerates 1 per 10 seconds
+- **Tick-Based Execution**: World processes all commands every 5 seconds
+- **Scriptable API**: Full WebSocket API for automation (see [API.md](API.md))
 
 ---
 
@@ -16,60 +31,137 @@ The game is designed to be scriptable: all commands are exposed as an API, so pl
 
 | Layer | Technology |
 |-------|-----------|
-| Graphics | Babylon.js (WebGPU) |
-| Physics (visual) | Rapier.js (WASM) |
-| UI | SolidJS |
-| Serialization | Protocol Buffers |
-| Backend | Nano (Go) |
-| Database | Redis |
+| Graphics | Babylon.js (WebGL2) |
+| 3D Models | Low-poly .glb models with textures |
+| UI | SolidJS (reactive framework) |
+| Serialization | JSON over WebSocket |
+| Backend | Go with Gorilla WebSocket |
+| State | In-memory (no database) |
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Go 1.21+
+- Node.js 18+
+- npm or yarn
+
+### Running the Backend
+
+```bash
+cd backend
+go run main.go
+```
+
+Backend starts on `http://localhost:8080`
+
+### Running the Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend starts on `http://localhost:5173`
+
+### Playing the Game
+
+1. Open `http://localhost:5173` in your browser
+2. Your unit spawns automatically with a random animal model
+3. Type commands into the input field (e.g., `move_up`, `attack_right`)
+4. Commands queue and execute every 5 seconds
+5. Watch your unit move on the 3D grid
 
 ---
 
 ## How to Play
 
-1. Your unit starts on the grid. You have up to 10 qi, regenerating 1 every 10 seconds.
-2. Type commands into the input field to queue actions.
-3. Every 5 seconds, the world executes all queued commands.
-4. You can edit or delete queued commands before they execute.
-
-### Commands (v0.1 — Soldier only)
+### Commands
 
 | Command | Cost | Effect |
 |---------|------|--------|
-| `move_up` | 1 qi | Move one cell up |
-| `move_down` | 1 qi | Move one cell down |
-| `move_left` | 1 qi | Move one cell left |
-| `move_right` | 1 qi | Move one cell right |
-| `attack_up` | 2 qi | Attack the cell above |
-| `attack_down` | 2 qi | Attack the cell below |
-| `attack_left` | 2 qi | Attack the cell to the left |
-| `attack_right` | 2 qi | Attack the cell to the right |
+| `move_up` | 1 qi | Move one cell north (negative Z) |
+| `move_down` | 1 qi | Move one cell south (positive Z) |
+| `move_left` | 1 qi | Move one cell west (negative X) |
+| `move_right` | 1 qi | Move one cell east (positive X) |
+| `attack_up` | 2 qi | Attack the cell north |
+| `attack_down` | 2 qi | Attack the cell south |
+| `attack_left` | 2 qi | Attack the cell west |
+| `attack_right` | 2 qi | Attack the cell east |
 
-Invalid commands return `"指令错误"` and cost no qi.
+### Game Mechanics
 
-### Conflict Resolution
+- **Qi System**: You have up to 10 qi, regenerating 1 every 10 seconds
+- **Command Queue**: Queue multiple commands; they execute in order
+- **Tick System**: World processes all commands every 5 seconds
+- **Conflict Resolution**: Move commands have priority over attack commands
+- **Collision**: Multiple units cannot move to the same cell in one tick
+- **Combat**: Attack deals 1 damage, units have 10 HP
 
-When two commands conflict in the same tick (e.g. one unit moves while another attacks it), **higher-priority commands resolve first**. Move commands have the highest priority; attack commands have the lowest. Same-priority commands resolve simultaneously with no race conditions.
+### Coordinate System
 
----
-
-## Units
-
-### Soldier
-- HP: 10
-- Attack: 1 damage per hit
-- Each soldier has a viewable **state panel** (HP, position, qi) and **action queue** (pending commands), both stored as JSON in Redis.
-
----
-
-## Scripting API
-
-All game commands are available via a scripting API. Players can write scripts (in any language) to automate their units programmatically. API spec TBD — see `TODO.md`.
+- **North (Up)**: Negative Z direction (blue marker)
+- **South (Down)**: Positive Z direction (red marker)
+- **West (Left)**: Negative X direction (green marker)
+- **East (Right)**: Positive X direction (yellow marker)
 
 ---
 
-## Development Status
+## Scripting
 
-Early development. Current milestone: documentation and design review before any code is written.
+All game commands are available via WebSocket API. Write scripts in any language to automate your units.
 
-See `TODO.md` for open design questions.
+See [API.md](API.md) for full WebSocket protocol documentation and example scripts.
+
+---
+
+## Documentation
+
+- [API.md](API.md) - WebSocket API and scripting guide
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Technical architecture deep-dive
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Deployment instructions
+- [UPDATE_LOG.md](UPDATE_LOG.md) - Version history
+- [CLAUDE.md](CLAUDE.md) - AI assistant guidance
+- [backend/README.md](backend/README.md) - Backend documentation
+- [frontend/README.md](frontend/README.md) - Frontend documentation
+- [frontend/ASSETS.md](frontend/ASSETS.md) - 3D model catalog
+
+---
+
+## Project Structure
+
+```
+PromptCraft/
+├── backend/          # Go backend server
+│   ├── game/         # Game logic (world, units, tick system)
+│   └── main.go       # WebSocket server entry point
+├── frontend/         # SolidJS frontend
+│   ├── src/
+│   │   ├── game/     # 3D scene (Babylon.js)
+│   │   ├── ui/       # UI components
+│   │   └── network/  # WebSocket client
+│   └── public/
+│       └── assets/   # 3D models and textures
+└── docs/             # Additional documentation
+```
+
+---
+
+## License
+
+MIT License - see LICENSE file for details
+
+---
+
+## Contributing
+
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## Support
+
+For issues or questions, please open an issue on GitHub.

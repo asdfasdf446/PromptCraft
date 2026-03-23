@@ -1,5 +1,58 @@
 # Update Log — New Features
 
+## Version 0.3.0 (2026-03-23)
+
+### 1. 3D Model System ✅
+- Replaced colored boxes with low-poly 3D animal models
+- **15 animal models**: bunny, caterpillar, cat, chick, cow, dog, elephant, fish, giraffe, hog, lion, monkey, parrot, pig, tiger
+- Models loaded from `/assets/models/animals/` directory as .glb files
+- Fixed texture path resolution for proper colormap.png loading
+- Fallback to colored box if model fails to load
+- Random model assignment with duplication minimization algorithm
+- Each player gets a unique animal model when possible
+
+### 2. Procedural Terrain Variety ✅
+- Replaced uniform grass tiles with varied terrain generation
+- **Weighted tile selection**:
+  - Ground grass (70% - base terrain)
+  - Open paths (10% - walkways)
+  - Small rocks A/B (2% each - obstacles)
+  - Small bushes (5% - vegetation)
+  - Yellow/red/purple flowers (3% each - decoration)
+- Deterministic generation using position-based seeding
+- Consistent world appearance across sessions
+- All terrain models loaded from `/assets/models/nature/` directory
+
+### 3. Grid Cell Borders ✅
+- Added visible dark gray borders between all grid cells
+- Thin border planes (0.05 units) at cell edges
+- Elevated slightly (y=0.01) to prevent z-fighting with terrain
+- Essential for debugging and precise positioning
+- Shared material for performance optimization
+
+### 4. Model Assignment Algorithm ✅
+- Backend tracks model usage across all units
+- `selectLeastUsedModel()` minimizes duplicate animals
+- Counts current usage of each model
+- Selects from least-used models randomly
+- Ensures visual variety in multiplayer sessions
+
+## Technical Changes
+
+### Backend Files Modified
+- `backend/game/world.go` — Added availableModels array, selectLeastUsedModel(), LastActions field
+- `backend/game/unit.go` — Added Model field to Unit struct
+- `backend/main.go` — Added Model to UnitState, Actions to ServerWorldState
+
+### Frontend Files Modified
+- `frontend/src/game/BabylonScene.tsx` — Fixed texture path resolution, added terrain variety, grid borders
+- `frontend/src/network/WebSocketClient.ts` — Added model field to UnitState interface
+
+### Assets Added
+- 15 animal .glb models in `frontend/public/assets/models/animals/`
+- Shared `Textures/colormap.png` for animal models
+- 300+ nature models in `frontend/public/assets/models/nature/`
+
 ## Version 0.2.0 (2026-03-23)
 
 ### 1. Compass / Direction Markers ✅
