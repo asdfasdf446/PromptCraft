@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package game;
+
+option go_package = "promptcraft/backend/proto";
+
+message ClientCommand {
+  string command = 1;
+  string unit_id = 2;
+}
+
+message UnitState {
+  string id = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 hp = 4;
+  int32 qi = 5;
+  string name = 6;
+  repeated string action_queue = 7;
+}
+
+message ServerWorldState {
+  repeated UnitState units = 1;
+  int64 tick = 2;
+}
