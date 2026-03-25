@@ -1,0 +1,15 @@
+{
+  "file": "cliff_steps_rock.glb",
+  "metadata": {
+    "total_buffer_length": 14052,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -3.60955721e-15,
+    "y_axis_offset": 3.60955721e-15
+  }
+}

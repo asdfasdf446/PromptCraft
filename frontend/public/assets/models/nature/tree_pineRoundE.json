@@ -1,0 +1,15 @@
+{
+  "file": "tree_pineRoundE.glb",
+  "metadata": {
+    "total_buffer_length": 13384,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -4.9639336e-19,
+    "y_axis_offset": 4.9639336e-19
+  }
+}

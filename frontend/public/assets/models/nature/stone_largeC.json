@@ -1,0 +1,15 @@
+{
+  "file": "stone_largeC.glb",
+  "metadata": {
+    "total_buffer_length": 5088,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 1,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -2.70716786e-16,
+    "y_axis_offset": 2.70716786e-16
+  }
+}

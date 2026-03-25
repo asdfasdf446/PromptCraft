@@ -1,0 +1,15 @@
+{
+  "file": "bridge_center_woodRound.glb",
+  "metadata": {
+    "total_buffer_length": 3536,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 4,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": 0.15,
+    "y_axis_offset": -0.15
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "file": "bridge_stoneRound.glb",
+  "metadata": {
+    "total_buffer_length": 20640,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -2.27941681e-28,
+    "y_axis_offset": 2.27941681e-28
+  }
+}

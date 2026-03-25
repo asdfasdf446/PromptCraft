@@ -1,0 +1,15 @@
+{
+  "file": "fence_gate.glb",
+  "metadata": {
+    "total_buffer_length": 24080,
+    "num_nodes": 3,
+    "num_meshes": 2,
+    "num_materials": 3,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -0.170281157,
+    "y_axis_offset": 0.170281157
+  }
+}

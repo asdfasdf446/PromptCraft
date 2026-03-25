@@ -1,0 +1,15 @@
+{
+  "file": "tent_smallClosed.glb",
+  "metadata": {
+    "total_buffer_length": 10448,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 4,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -2.671147e-16,
+    "y_axis_offset": 2.671147e-16
+  }
+}

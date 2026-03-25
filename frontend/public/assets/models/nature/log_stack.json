@@ -1,0 +1,15 @@
+{
+  "file": "log_stack.glb",
+  "metadata": {
+    "total_buffer_length": 8992,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -8.34465e-08,
+    "y_axis_offset": 8.34465e-08
+  }
+}

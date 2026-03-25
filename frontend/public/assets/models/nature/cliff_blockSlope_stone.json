@@ -1,0 +1,15 @@
+{
+  "file": "cliff_blockSlope_stone.glb",
+  "metadata": {
+    "total_buffer_length": 4808,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -5.02157027e-09,
+    "y_axis_offset": 5.02157027e-09
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "file": "animal-tiger.glb",
+  "metadata": {
+    "total_buffer_length": 67216,
+    "num_nodes": 8,
+    "num_meshes": 6,
+    "num_materials": 1,
+    "num_animations": 3,
+    "animation_names": [
+      "static",
+      "walk",
+      "run"
+    ]
+  },
+  "geometry": {
+    "global_min_y": -0.30000001192092896,
+    "y_axis_offset": 0.30000001192092896
+  }
+}

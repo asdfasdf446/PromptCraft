@@ -1,0 +1,15 @@
+{
+  "file": "rock_largeB.glb",
+  "metadata": {
+    "total_buffer_length": 6236,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 3,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -5.86553e-16,
+    "y_axis_offset": 5.86553e-16
+  }
+}

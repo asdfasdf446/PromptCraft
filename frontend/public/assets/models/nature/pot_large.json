@@ -1,0 +1,15 @@
+{
+  "file": "pot_large.glb",
+  "metadata": {
+    "total_buffer_length": 4272,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -3.25602326e-32,
+    "y_axis_offset": 3.25602326e-32
+  }
+}

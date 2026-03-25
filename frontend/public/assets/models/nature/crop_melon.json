@@ -1,0 +1,15 @@
+{
+  "file": "crop_melon.glb",
+  "metadata": {
+    "total_buffer_length": 10992,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 3,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": 0,
+    "y_axis_offset": 0
+  }
+}

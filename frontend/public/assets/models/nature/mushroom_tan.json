@@ -1,0 +1,15 @@
+{
+  "file": "mushroom_tan.glb",
+  "metadata": {
+    "total_buffer_length": 3904,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": 4.00741335e-32,
+    "y_axis_offset": -4.00741335e-32
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "file": "crop_turnip.glb",
+  "metadata": {
+    "total_buffer_length": 12384,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": -3.20593068e-31,
+    "y_axis_offset": 3.20593068e-31
+  }
+}

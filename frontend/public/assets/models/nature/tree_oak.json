@@ -1,0 +1,15 @@
+{
+  "file": "tree_oak.glb",
+  "metadata": {
+    "total_buffer_length": 12720,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": 1.60296534e-31,
+    "y_axis_offset": -1.60296534e-31
+  }
+}

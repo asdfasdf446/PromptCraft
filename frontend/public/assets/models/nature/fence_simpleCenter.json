@@ -1,0 +1,15 @@
+{
+  "file": "fence_simpleCenter.glb",
+  "metadata": {
+    "total_buffer_length": 6768,
+    "num_nodes": 2,
+    "num_meshes": 1,
+    "num_materials": 2,
+    "num_animations": 0,
+    "animation_names": []
+  },
+  "geometry": {
+    "global_min_y": 0,
+    "y_axis_offset": 0
+  }
+}
