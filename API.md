@@ -1,0 +1,390 @@
+# PromptCraft API Documentation
+
+Complete guide to the WebSocket API for scripting and automation.
+
+---
+
+## Overview
+
+PromptCraft exposes a WebSocket API that allows you to control units programmatically. Write scripts in any language that supports WebSocket connections to automate gameplay.
+
+**WebSocket Endpoint**: `ws://[server-ip]:8080/ws`
+
+---
+
+## Connection
+
+### Establishing Connection
+
+```javascript
+// JavaScript/Node.js
+const WebSocket = require('ws');
+const ws = new WebSocket('ws://192.168.80.190:8080/ws');
+
+ws.on('open', () => {
+  console.log('Connected to PromptCraft');
+});
+```
+
+```python
+# Python
+import websocket
+import json
+
+ws = websocket.create_connection('ws://192.168.80.190:8080/ws')
+print('Connected to PromptCraft')
+```
+
+### Connection Lifecycle
+
+1. **Connect**: Open WebSocket connection to `/ws`
+2. **Spawn**: Server automatically spawns a unit for you
+3. **Receive**: Server sends initial world state with your unit ID
+4. **Send**: Send commands to control your unit
+5. **Updates**: Receive world state updates every 5 seconds (tick)
+
+---
+
+## Message Format
+
+### Client → Server (Commands)
+
+```json
+{
+  "command": "move_up",
+  "unit_id": "9f43e268-677d-4d22-9bf3-124acf9531b7"
+}
+```
+
+**Fields**:
+- `command` (string): Command to execute (see Commands section)
+- `unit_id` (string): Your unit's UUID (received in first world state)
+
+### Server → Client (World State)
+
+```json
+{
+  "units": [
+    {
+      "id": "9f43e268-677d-4d22-9bf3-124acf9531b7",
+      "x": 15,
+      "y": 20,
+      "hp": 10,
+      "qi": 7,
+      "name": "Player-9f43e268",
+      "model": "animals/animal-fish.glb",
+      "action_queue": ["move_up", "attack_right"]
+    }
+  ],
+  "tick": 42,
+  "actions": [
+    {
+      "unit_id": "9f43e268-677d-4d22-9bf3-124acf9531b7",
+      "action": "move_up",
+      "x": 15,
+      "y": 19
+    }
+  ]
+}
+```
+
+**Fields**:
+- `units` (array): All active units in the world
+  - `id` (string): Unit UUID
+  - `x` (int): X coordinate (0-29, west to east)
+  - `y` (int): Y coordinate (0-29, north to south)
+  - `hp` (int): Health points (0-10)
+  - `qi` (int): Qi resource (0-10)
+  - `name` (string): Unit display name
+  - `model` (string): 3D model path
+  - `action_queue` (array): Queued commands
+- `tick` (int): Current world tick number
+- `actions` (array): Actions executed in last tick (optional)
+
+---
+
+## Commands
+
+### Movement Commands
+
+| Command | Cost | Effect |
+|---------|------|--------|
+| `move_up` | 1 qi | Move north (y - 1) |
+| `move_down` | 1 qi | Move south (y + 1) |
+| `move_left` | 1 qi | Move west (x - 1) |
+| `move_right` | 1 qi | Move east (x + 1) |
+
+**Notes**:
+- Movement fails if target cell is occupied or out of bounds
+- Failed moves still consume qi
+- Multiple units cannot move to same cell in one tick
+
+### Attack Commands
+
+| Command | Cost | Effect |
+|---------|------|--------|
+| `attack_up` | 2 qi | Attack north (y - 1) |
+| `attack_down` | 2 qi | Attack south (y + 1) |
+| `attack_left` | 2 qi | Attack west (x - 1) |
+| `attack_right` | 2 qi | Attack east (x + 1) |
+
+**Notes**:
+- Deals 1 damage to target unit
+- Consumes qi even if no target present
+- Target dies at 0 HP
+
+---
+
+## Game Mechanics
+
+### Qi System
+- **Maximum**: 10 qi
+- **Regeneration**: +1 qi every 10 seconds
+- **Usage**: Commands consume qi when executed
+- **Insufficient qi**: Commands remain queued until qi available
+
+### Tick System
+- **Interval**: 5 seconds
+- **Execution**: All queued commands process in priority order
+- **Priority**: Move commands (priority 1) execute before attack commands (priority 2)
+
+### Coordinate System
+- **Grid**: 30×30 (0-29 on both axes)
+- **X-axis**: 0 = west, 29 = east
+- **Y-axis**: 0 = north, 29 = south
+- **Origin**: Top-left corner (0, 0)
+
+---
+
+## Example Scripts
+
+### JavaScript Bot (Node.js)
+
+```javascript
+const WebSocket = require('ws');
+
+const ws = new WebSocket('ws://192.168.80.190:8080/ws');
+let myUnitId = null;
+
+ws.on('open', () => {
+  console.log('Connected!');
+});
+
+ws.on('message', (data) => {
+  const state = JSON.parse(data);
+
+  // Store unit ID from first message
+  if (!myUnitId && state.units.length > 0) {
+    myUnitId = state.units[state.units.length - 1].id;
+    console.log('My unit ID:', myUnitId);
+  }
+
+  // Find my unit
+  const myUnit = state.units.find(u => u.id === myUnitId);
+  if (!myUnit) return;
+
+  console.log(`Tick ${state.tick}: Position (${myUnit.x}, ${myUnit.y}), HP: ${myUnit.hp}, Qi: ${myUnit.qi}`);
+
+  // Simple AI: move randomly if qi available and queue empty
+  if (myUnit.qi >= 1 && myUnit.action_queue.length === 0) {
+    const moves = ['move_up', 'move_down', 'move_left', 'move_right'];
+    const command = moves[Math.floor(Math.random() * moves.length)];
+
+    ws.send(JSON.stringify({
+      command: command,
+      unit_id: myUnitId
+    }));
+
+    console.log('Sent command:', command);
+  }
+});
+
+ws.on('close', () => {
+  console.log('Disconnected');
+});
+```
+
+### Python Bot
+
+```python
+import websocket
+import json
+import random
+import time
+
+my_unit_id = None
+
+def on_message(ws, message):
+    global my_unit_id
+    state = json.loads(message)
+
+    # Store unit ID from first message
+    if not my_unit_id and state['units']:
+        my_unit_id = state['units'][-1]['id']
+        print(f'My unit ID: {my_unit_id}')
+
+    # Find my unit
+    my_unit = next((u for u in state['units'] if u['id'] == my_unit_id), None)
+    if not my_unit:
+        return
+
+    print(f"Tick {state['tick']}: Position ({my_unit['x']}, {my_unit['y']}), HP: {my_unit['hp']}, Qi: {my_unit['qi']}")
+
+    # Simple AI: move randomly if qi available and queue empty
+    if my_unit['qi'] >= 1 and len(my_unit['action_queue']) == 0:
+        moves = ['move_up', 'move_down', 'move_left', 'move_right']
+        command = random.choice(moves)
+
+        ws.send(json.dumps({
+            'command': command,
+            'unit_id': my_unit_id
+        }))
+
+        print(f'Sent command: {command}')
+
+def on_open(ws):
+    print('Connected!')
+
+def on_close(ws, close_status_code, close_msg):
+    print('Disconnected')
+
+# Connect
+ws = websocket.WebSocketApp(
+    'ws://192.168.80.190:8080/ws',
+    on_message=on_message,
+    on_open=on_open,
+    on_close=on_close
+)
+
+ws.run_forever()
+```
+
+### Advanced: Pathfinding Bot
+
+```python
+import websocket
+import json
+from collections import deque
+
+my_unit_id = None
+
+def bfs_path(grid, start, goal):
+    """Find shortest path using BFS"""
+    if start == goal:
+        return []
+
+    queue = deque([(start, [])])
+    visited = {start}
+
+    while queue:
+        (x, y), path = queue.popleft()
+
+        for dx, dy, cmd in [(0, -1, 'move_up'), (0, 1, 'move_down'),
+                             (-1, 0, 'move_left'), (1, 0, 'move_right')]:
+            nx, ny = x + dx, y + dy
+
+            if (nx, ny) == goal:
+                return path + [cmd]
+
+            if 0 <= nx < 30 and 0 <= ny < 30 and (nx, ny) not in visited and not grid[nx][ny]:
+                visited.add((nx, ny))
+                queue.append(((nx, ny), path + [cmd]))
+
+    return []
+
+def on_message(ws, message):
+    global my_unit_id
+    state = json.loads(message)
+
+    if not my_unit_id and state['units']:
+        my_unit_id = state['units'][-1]['id']
+
+    my_unit = next((u for u in state['units'] if u['id'] == my_unit_id), None)
+    if not my_unit:
+        return
+
+    # Build occupancy grid
+    grid = [[False] * 30 for _ in range(30)]
+    for unit in state['units']:
+        if unit['id'] != my_unit_id:
+            grid[unit['x']][unit['y']] = True
+
+    # Find nearest enemy
+    enemies = [u for u in state['units'] if u['id'] != my_unit_id]
+    if enemies and my_unit['qi'] >= 1 and len(my_unit['action_queue']) == 0:
+        nearest = min(enemies, key=lambda u: abs(u['x'] - my_unit['x']) + abs(u['y'] - my_unit['y']))
+
+        # Path to enemy
+        path = bfs_path(grid, (my_unit['x'], my_unit['y']), (nearest['x'], nearest['y']))
+
+        if path:
+            ws.send(json.dumps({
+                'command': path[0],
+                'unit_id': my_unit_id
+            }))
+
+ws = websocket.WebSocketApp('ws://192.168.80.190:8080/ws', on_message=on_message)
+ws.run_forever()
+```
+
+---
+
+## Best Practices
+
+### Command Queuing
+- Check `action_queue` length before sending commands
+- Avoid spamming commands when queue is full
+- Monitor qi levels to ensure commands can execute
+
+### Error Handling
+- Handle WebSocket disconnections gracefully
+- Implement reconnection logic with exponential backoff
+- Validate unit still exists before sending commands
+
+### Performance
+- Process world state updates efficiently
+- Avoid blocking operations in message handlers
+- Use async/await patterns for non-blocking I/O
+
+### Strategy
+- Track enemy positions and predict movements
+- Implement pathfinding for intelligent navigation
+- Balance offense (attacks) and defense (positioning)
+- Manage qi resource carefully
+
+---
+
+## Limitations
+
+- **Max Players**: 10 units per world
+- **Grid Size**: 30×30 cells
+- **Command Rate**: Limited by qi regeneration (1 per 10s)
+- **Tick Rate**: 5-second intervals (not real-time)
+- **No Persistence**: World state resets on server restart
+
+---
+
+## Troubleshooting
+
+### Connection Refused
+- Verify server is running: `ps aux | grep "go run main.go"`
+- Check firewall allows port 8080
+- Confirm server IP address
+
+### Commands Not Executing
+- Check qi level (must be ≥ cost)
+- Verify unit ID is correct
+- Ensure command string matches exactly
+
+### Unit Not Found
+- Unit may have been destroyed (HP = 0)
+- Reconnect to spawn new unit
+- Check `units` array in world state
+
+---
+
+## See Also
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Technical architecture details
+- [CONTRIBUTING.md](CONTRIBUTING.md) - How to add new commands
+- [docs/guides/scripting-guide.md](docs/guides/scripting-guide.md) - Advanced scripting techniques
