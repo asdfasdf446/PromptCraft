@@ -43,6 +43,7 @@ export default function BabylonScene(props: Props) {
   const unitPrevPositions = new Map<string, { x: number; y: number }>();
   const unitAnimationGroups = new Map<string, AnimationGroup[]>();
   const unitYOffsets = new Map<string, number>();
+  const unitFacingDirections = new Map<string, number>();
   const borderMeshes: Mesh[] = [];
   let sunLight: DirectionalLight;
 
@@ -76,28 +77,30 @@ export default function BabylonScene(props: Props) {
     sunLight.intensity = 0.7;
     sunLight.diffuse = new Color3(1, 0.9, 0.7);
 
-    // Tile selection function for terrain variety
-    const tileModels = [
-      { model: "ground_grass.glb", weight: 70 },
-      { model: "ground_pathOpen.glb", weight: 10 },
-      { model: "rock_smallA.glb", weight: 2 },
-      { model: "rock_smallB.glb", weight: 2 },
-      { model: "plant_bushSmall.glb", weight: 5 },
+    // Double-layer terrain: base ground + optional surface object
+    const baseModels = [
+      { model: "ground_grass.glb", weight: 85 },
+      { model: "ground_pathOpen.glb", weight: 15 },
+    ];
+    const surfaceModels: { model: string | null; weight: number }[] = [
+      { model: null, weight: 70 },
+      { model: "rock_smallA.glb", weight: 5 },
+      { model: "rock_smallB.glb", weight: 5 },
+      { model: "plant_bushSmall.glb", weight: 8 },
+      { model: "grass.glb", weight: 5 },
       { model: "flower_yellowA.glb", weight: 3 },
-      { model: "flower_redA.glb", weight: 3 },
-      { model: "flower_purpleA.glb", weight: 3 },
+      { model: "flower_redA.glb", weight: 2 },
+      { model: "flower_purpleA.glb", weight: 2 },
     ];
 
-    const selectTileModel = (x: number, z: number): string => {
-      const seed = x * 31 + z * 17;
+    const selectModel = (models: { model: string | null; weight: number }[], seed: number): string | null => {
       const random = (Math.abs(Math.sin(seed)) * 10000) % 100;
-
       let cumulative = 0;
-      for (const tile of tileModels) {
-        cumulative += tile.weight;
-        if (random < cumulative) return tile.model;
+      for (const item of models) {
+        cumulative += item.weight;
+        if (random < cumulative) return item.model;
       }
-      return "ground_grass.glb";
+      return models[0].model;
     };
 
     // Create border material (shared for all borders)
@@ -105,11 +108,12 @@ export default function BabylonScene(props: Props) {
     borderMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
     borderMat.specularColor = new Color3(0, 0, 0);
 
-    // Create grid floor with 3D tiles and borders
+    // Create grid floor with double-layer tiles and borders
     for (let x = 0; x < 30; x++) {
       for (let z = 0; z < 30; z++) {
-        const tileModel = selectTileModel(x, z);
-        SceneLoader.ImportMesh("", "/assets/models/nature/", tileModel, scene,
+        // Base layer: always a ground tile
+        const baseModel = selectModel(baseModels, x * 31 + z * 17) as string;
+        SceneLoader.ImportMesh("", "/assets/models/nature/", baseModel, scene,
           (meshes) => {
             if (meshes.length > 0) {
               const tile = meshes[0];
@@ -119,6 +123,21 @@ export default function BabylonScene(props: Props) {
             }
           }
         );
+
+        // Surface layer: optional object on top (~30% of tiles)
+        const surfaceModel = selectModel(surfaceModels, x * 53 + z * 37);
+        if (surfaceModel) {
+          SceneLoader.ImportMesh("", "/assets/models/nature/", surfaceModel, scene,
+            (meshes) => {
+              if (meshes.length > 0) {
+                const surface = meshes[0];
+                surface.name = `surface_${x}_${z}`;
+                surface.position = new Vector3(x, 0, z);
+                surface.scaling = new Vector3(1, 1, 1);
+              }
+            }
+          );
+        }
 
         // Add vertical border (right edge of cell)
         if (x < 29) {
@@ -396,50 +415,40 @@ export default function BabylonScene(props: Props) {
           const startPos = new Vector3(prevPos.x, yOffset, prevPos.y);
           const endPos = new Vector3(unit.x, yOffset, unit.y);
 
-          // Calculate rotation based on movement direction
+          // Calculate target rotation from movement direction
           const dx = unit.x - prevPos.x;
           const dy = unit.y - prevPos.y;
-          let targetRotation = mesh.rotation.y;
+          let targetRotation = 0;
+          if (dx > 0) targetRotation = Math.PI / 2;
+          else if (dx < 0) targetRotation = -Math.PI / 2;
+          else if (dy > 0) targetRotation = Math.PI;
+          else if (dy < 0) targetRotation = 0;
 
-          if (dx > 0) targetRotation = Math.PI / 2; // East
-          else if (dx < 0) targetRotation = -Math.PI / 2; // West
-          else if (dy > 0) targetRotation = Math.PI; // South
-          else if (dy < 0) targetRotation = 0; // North
+          // Compute shortest-path delta from tracked facing direction
+          const currentFacing = unitFacingDirections.get(unit.id) ?? 0;
+          let delta = targetRotation - currentFacing;
+          while (delta > Math.PI) delta -= 2 * Math.PI;
+          while (delta < -Math.PI) delta += 2 * Math.PI;
+          // For 180° turns, randomly choose left or right
+          if (Math.abs(Math.abs(delta) - Math.PI) < 0.01) {
+            delta = Math.random() < 0.5 ? Math.PI : -Math.PI;
+          }
 
-          // Create position animation (2 seconds)
-          const posAnim = new Animation(
-            'moveAnim',
-            'position',
-            60,
-            Animation.ANIMATIONTYPE_VECTOR3,
-            Animation.ANIMATIONLOOPMODE_CONSTANT
-          );
-          posAnim.setKeys([
-            { frame: 0, value: startPos },
-            { frame: 120, value: endPos }
-          ]);
+          // Split total 2s proportionally: rotFrames + moveFrames = 120
+          const rotFrames = Math.round((Math.abs(delta) / Math.PI) * 60);
+          const moveFrames = 120 - rotFrames;
+          const endRotation = currentFacing + delta;
 
-          // Create rotation animation (0.5 seconds)
-          const rotAnim = new Animation(
-            'rotAnim',
-            'rotation.y',
-            60,
-            Animation.ANIMATIONTYPE_FLOAT,
-            Animation.ANIMATIONLOOPMODE_CONSTANT
-          );
-          rotAnim.setKeys([
-            { frame: 0, value: mesh.rotation.y },
-            { frame: 30, value: targetRotation }
-          ]);
-
-          // Rotate first, then move
-          mesh.animations = [rotAnim];
-          const rotAnimatable = scene.beginAnimation(mesh, 0, 30, false, 1.0);
-          rotAnimatable.onAnimationEndObservable.addOnce(() => {
+          const startMove = () => {
+            const posAnim = new Animation('moveAnim', 'position', 60,
+              Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
+            posAnim.setKeys([
+              { frame: 0, value: startPos },
+              { frame: moveFrames, value: endPos }
+            ]);
             mesh.animations = [posAnim];
-            scene.beginAnimation(mesh, 0, 120, false, 1.0);
+            scene.beginAnimation(mesh, 0, moveFrames, false, 1.0);
 
-            // Play walk animation (looping) while moving
             const animGroups = unitAnimationGroups.get(unit.id);
             if (animGroups) {
               const walkAnim = animGroups.find(ag =>
@@ -449,12 +458,27 @@ export default function BabylonScene(props: Props) {
               );
               if (walkAnim) {
                 walkAnim.start(true, 1.0, walkAnim.from, walkAnim.to, false);
-                setTimeout(() => walkAnim.stop(), 2000);
-              } else {
-                console.warn(`Unit ${unit.id}: No walk animation found`);
+                setTimeout(() => walkAnim.stop(), (moveFrames / 60) * 1000);
               }
             }
-          });
+          };
+
+          if (rotFrames > 0) {
+            const rotAnim = new Animation('rotAnim', 'rotation.y', 60,
+              Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
+            rotAnim.setKeys([
+              { frame: 0, value: currentFacing },
+              { frame: rotFrames, value: endRotation }
+            ]);
+            mesh.animations = [rotAnim];
+            const rotAnimatable = scene.beginAnimation(mesh, 0, rotFrames, false, 1.0);
+            rotAnimatable.onAnimationEndObservable.addOnce(() => {
+              unitFacingDirections.set(unit.id, targetRotation);
+              startMove();
+            });
+          } else {
+            startMove();
+          }
         }
 
         // Update previous position
