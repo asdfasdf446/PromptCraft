@@ -8,6 +8,7 @@ import {
   Vector3,
   MeshBuilder,
   StandardMaterial,
+  PBRMaterial,
   Color3,
   Mesh,
   PointerEventTypes,
@@ -41,6 +42,7 @@ export default function BabylonScene(props: Props) {
   const actionIcons = new Map<string, { plane: Mesh; startTime: number }>();
   const unitPrevPositions = new Map<string, { x: number; y: number }>();
   const unitAnimationGroups = new Map<string, AnimationGroup[]>();
+  const unitYOffsets = new Map<string, number>();
   const borderMeshes: Mesh[] = [];
   let sunLight: DirectionalLight;
 
@@ -196,12 +198,19 @@ export default function BabylonScene(props: Props) {
       }
     });
 
+    // Per-frame smooth arrow bobbing
+    scene.registerBeforeRender(() => {
+      if (playerArrow.mesh) {
+        playerArrow.mesh.position.y = 2.5 + Math.sin(Date.now() / 1000 * 2) * 0.2;
+      }
+    });
+
     // Render loop
     engine.runRenderLoop(() => {
       scene.render();
 
-      // Day/Night Cycle (30 seconds per cycle)
-      const cycleTime = 30; // seconds
+      // Day/Night Cycle (3 minutes per cycle)
+      const cycleTime = 180; // seconds
       const time = Date.now() / 1000;
       const phase = (time % cycleTime) / cycleTime; // 0 to 1
       setCycleProgress(phase);
@@ -212,31 +221,43 @@ export default function BabylonScene(props: Props) {
       const sunHorizontal = Math.cos(sunAngle);
       sunLight.direction = new Vector3(sunHorizontal, -Math.abs(sunHeight) - 0.3, 0.5).normalize();
 
-      // Color and intensity based on phase
+      // Keyframe values for smooth continuous interpolation
+      // cycle: midnight(0) -> morning(0.25) -> afternoon(0.5) -> evening(0.75) -> midnight(1)
+      const kfMidnight  = { i: 0.15, dr: 0.2, dg: 0.2,  db: 0.4,  sr: 0.05, sg: 0.05, sb: 0.15 };
+      const kfMorning   = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.5,  sg: 0.7,  sb: 1.0  };
+      const kfAfternoon = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.4,  sg: 0.6,  sb: 1.0  };
+      const kfEvening   = { i: 0.2,  dr: 1.0, dg: 0.2,  db: 0.05, sr: 0.1,  sg: 0.05, sb: 0.05 };
+
+      type Kf = typeof kfMidnight;
+      const lerpKf = (a: Kf, b: Kf, t: number): Kf => ({
+        i:  a.i  + (b.i  - a.i)  * t,
+        dr: a.dr + (b.dr - a.dr) * t,
+        dg: a.dg + (b.dg - a.dg) * t,
+        db: a.db + (b.db - a.db) * t,
+        sr: a.sr + (b.sr - a.sr) * t,
+        sg: a.sg + (b.sg - a.sg) * t,
+        sb: a.sb + (b.sb - a.sb) * t,
+      });
+
+      let kf: Kf;
       let currentPhase: DayPhase;
-      if (phase < 0.25) { // Morning (0-7.5s)
+      if (phase < 0.25) {
         currentPhase = 'morning';
-        const t = phase * 4;
-        sunLight.diffuse = new Color3(1, 0.85 + t * 0.1, 0.6 + t * 0.3);
-        sunLight.intensity = 0.5 + t * 0.3;
-        scene.clearColor = new Color3(0.3 + t * 0.2, 0.5 + t * 0.2, 0.8 + t * 0.2).toColor4();
-      } else if (phase < 0.5) { // Afternoon (7.5-15s)
+        kf = lerpKf(kfMidnight, kfMorning, phase * 4);
+      } else if (phase < 0.5) {
         currentPhase = 'afternoon';
-        sunLight.diffuse = new Color3(1, 0.95, 0.9);
-        sunLight.intensity = 0.8;
-        scene.clearColor = new Color3(0.4, 0.6, 1.0).toColor4();
-      } else if (phase < 0.75) { // Evening (15-22.5s)
+        kf = lerpKf(kfMorning, kfAfternoon, (phase - 0.25) * 4);
+      } else if (phase < 0.75) {
         currentPhase = 'evening';
-        const t = (phase - 0.5) * 4;
-        sunLight.diffuse = new Color3(1, 0.5 - t * 0.3, 0.2 - t * 0.15);
-        sunLight.intensity = 0.8 - t * 0.6;
-        scene.clearColor = new Color3(0.7 - t * 0.6, 0.4 - t * 0.35, 0.3 - t * 0.25).toColor4();
-      } else { // Midnight (22.5-30s)
+        kf = lerpKf(kfAfternoon, kfEvening, (phase - 0.5) * 4);
+      } else {
         currentPhase = 'midnight';
-        sunLight.diffuse = new Color3(0.2, 0.2, 0.4);
-        sunLight.intensity = 0.15;
-        scene.clearColor = new Color3(0.05, 0.05, 0.15).toColor4();
+        kf = lerpKf(kfEvening, kfMidnight, (phase - 0.75) * 4);
       }
+
+      sunLight.diffuse = new Color3(kf.dr, kf.dg, kf.db);
+      sunLight.intensity = kf.i;
+      scene.clearColor = new Color3(kf.sr, kf.sg, kf.sb).toColor4();
       setCurrentDayPhase(currentPhase);
 
       // Update FPS for debug bar
@@ -267,12 +288,12 @@ export default function BabylonScene(props: Props) {
     });
   });
 
-  // Debug: Wireframe Mode
+  // Debug: Wireframe Mode — applies to both StandardMaterial and PBRMaterial (used by GLB models)
   createEffect(() => {
     if (!scene) return;
     const enabled = wireframeMode();
     scene.materials.forEach((mat) => {
-      if (mat instanceof StandardMaterial) {
+      if (mat instanceof StandardMaterial || mat instanceof PBRMaterial) {
         mat.wireframe = enabled;
       }
     });
@@ -310,7 +331,6 @@ export default function BabylonScene(props: Props) {
 
       if (!mesh) {
         // Load 3D model for new unit
-        // Extract directory and filename from model path for correct texture resolution
         const modelPath = unit.model.split('/');
         const modelFile = modelPath.pop() || unit.model;
         const basePath = `/assets/models/${modelPath.join('/')}/`;
@@ -320,9 +340,23 @@ export default function BabylonScene(props: Props) {
             if (meshes.length > 0) {
               const rootMesh = meshes[0];
               rootMesh.name = `unit_${unit.id}`;
-              rootMesh.position = new Vector3(unit.x, 0.5, unit.y);
               rootMesh.scaling = new Vector3(0.5, 0.5, 0.5);
+
+              // Compute bounding box to ground the model correctly
+              rootMesh.computeWorldMatrix(true);
+              const { min } = rootMesh.getHierarchyBoundingVectors(true);
+              const yOffset = Math.max(0, -min.y);
+              unitYOffsets.set(unit.id, yOffset);
+              rootMesh.position = new Vector3(unit.x, yOffset, unit.y);
+
               unitMeshes.set(unit.id, rootMesh);
+
+              // Apply wireframe to newly loaded PBR materials if mode is active
+              if (wireframeMode()) {
+                scene.materials.forEach((mat) => {
+                  if (mat instanceof PBRMaterial) mat.wireframe = true;
+                });
+              }
 
               // Store animation groups for this unit
               if (animationGroups && animationGroups.length > 0) {
@@ -358,8 +392,9 @@ export default function BabylonScene(props: Props) {
 
         if (prevPos && (prevPos.x !== unit.x || prevPos.y !== unit.y)) {
           // Position changed - animate movement
-          const startPos = new Vector3(prevPos.x, 0.5, prevPos.y);
-          const endPos = new Vector3(unit.x, 0.5, unit.y);
+          const yOffset = unitYOffsets.get(unit.id) ?? 0.5;
+          const startPos = new Vector3(prevPos.x, yOffset, prevPos.y);
+          const endPos = new Vector3(unit.x, yOffset, unit.y);
 
           // Calculate rotation based on movement direction
           const dx = unit.x - prevPos.x;
@@ -384,7 +419,7 @@ export default function BabylonScene(props: Props) {
             { frame: 120, value: endPos }
           ]);
 
-          // Create rotation animation
+          // Create rotation animation (0.5 seconds)
           const rotAnim = new Animation(
             'rotAnim',
             'rotation.y',
@@ -397,25 +432,29 @@ export default function BabylonScene(props: Props) {
             { frame: 30, value: targetRotation }
           ]);
 
-          mesh.animations = [posAnim, rotAnim];
-          scene.beginAnimation(mesh, 0, 120, false);
+          // Rotate first, then move
+          mesh.animations = [rotAnim];
+          const rotAnimatable = scene.beginAnimation(mesh, 0, 30, false, 1.0);
+          rotAnimatable.onAnimationEndObservable.addOnce(() => {
+            mesh.animations = [posAnim];
+            scene.beginAnimation(mesh, 0, 120, false, 1.0);
 
-          // Play walk animation if available
-          const animGroups = unitAnimationGroups.get(unit.id);
-          if (animGroups) {
-            const walkAnim = animGroups.find(ag =>
-              ag.name.toLowerCase().includes('walk') ||
-              ag.name.toLowerCase().includes('run') ||
-              ag.name.toLowerCase().includes('move')
-            );
-            if (walkAnim) {
-              walkAnim.start(false, 1.0, walkAnim.from, walkAnim.to);
-              // Stop after 2 seconds
-              setTimeout(() => walkAnim.stop(), 2000);
-            } else {
-              console.warn(`Unit ${unit.id}: No walk animation found`);
+            // Play walk animation (looping) while moving
+            const animGroups = unitAnimationGroups.get(unit.id);
+            if (animGroups) {
+              const walkAnim = animGroups.find(ag =>
+                ag.name.toLowerCase().includes('walk') ||
+                ag.name.toLowerCase().includes('run') ||
+                ag.name.toLowerCase().includes('move')
+              );
+              if (walkAnim) {
+                walkAnim.start(true, 1.0, walkAnim.from, walkAnim.to, false);
+                setTimeout(() => walkAnim.stop(), 2000);
+              } else {
+                console.warn(`Unit ${unit.id}: No walk animation found`);
+              }
             }
-          }
+          });
         }
 
         // Update previous position
@@ -429,10 +468,10 @@ export default function BabylonScene(props: Props) {
 
       if (myUnit) {
         if (!playerArrow.mesh) {
-          // Create arrow indicator (cone pointing down)
+          // Create cone pointing downward (tip at bottom)
           playerArrow.mesh = MeshBuilder.CreateCylinder('playerArrow', {
-            diameterTop: 0,
-            diameterBottom: 0.4,
+            diameterTop: 0.4,
+            diameterBottom: 0,
             height: 0.6,
             tessellation: 8
           }, scene);
@@ -441,12 +480,14 @@ export default function BabylonScene(props: Props) {
           arrowMat.diffuseColor = new Color3(1, 1, 0); // Yellow
           arrowMat.emissiveColor = new Color3(1, 1, 0).scale(0.5);
           playerArrow.mesh.material = arrowMat;
+          // Set initial X/Z; Y is driven by registerBeforeRender
+          playerArrow.mesh.position.x = myUnit.x;
+          playerArrow.mesh.position.z = myUnit.y;
         }
 
-        // Position arrow above player's unit with bobbing animation
-        const time = Date.now() / 1000;
-        const bobOffset = Math.sin(time * 2) * 0.2;
-        playerArrow.mesh.position = new Vector3(myUnit.x, 2.5 + bobOffset, myUnit.y);
+        // Only update X/Z — Y is handled per-frame by registerBeforeRender for smooth bobbing
+        playerArrow.mesh.position.x = myUnit.x;
+        playerArrow.mesh.position.z = myUnit.y;
       } else if (playerArrow.mesh) {
         // Remove arrow if player unit doesn't exist
         playerArrow.mesh.dispose();

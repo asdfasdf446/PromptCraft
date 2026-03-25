@@ -1,59 +1,21 @@
-Act as a Senior Go Engineer. Implement a "JWT Guest/Official Account Dual-Track Login System" for an existing web game backend based on Go + Nano + Redis, and synchronously update the relevant API code and development documentation.
+English Translation
+1. Debug Tools Wireframe Mode Fix
+Currently, toggling Wireframe Mode only affects the direction indicators and the overhead arrow, leaving the character model unaffected. Update the logic so that the character's .glb model materials synchronously switch to wireframe rendering when this mode is enabled.
 
-1. Core Tech Stack & Dependencies
-Backend Framework: Nano (Go)
+2. Character Movement Animation & Smooth Rotation Optimization
 
-Cache & Hot Data: Redis
+Animation Looping: The movement animation currently plays once, causing the character to slide stiffly if the movement action is still in progress. Modify this to loop the walk/move animation continuously until the destination is reached.
 
-Account Persistence Library: SQLite (to be created)
+Smooth Turning: Eliminate instant translation when changing directions. Implement a smooth rotation transition around the vertical axis so the character naturally turns to face the new direction before moving forward.
 
-Core Dependencies: github.com/golang-jwt/jwt/v5, golang.org/x/crypto/bcrypt
+3. Character Altitude/Grounding Correction
+The character model is currently floating above the ground. Inspect and fix the model's origin positioning or bounding box calculation logic to ensure the bottom of the mesh rests naturally on the ground plane.
 
-2. Functional Modules & Logic Implementation
-2.1 Database & Account Model
-Initialize the SQLite database and create a user table containing: id (primary key), username (unique index), and password_hash.
+4. Day/Night Lighting Cycle Optimization
+Extend the full lighting cycle duration from 30 seconds to 3 minutes. Improve the color interpolation algorithm to eliminate any sudden color shifts, ensuring a completely smooth and seamless transition throughout the cycle.
 
-Write the registration logic: obtain the username and password, use bcrypt to salt and hash the password, and store the hash value in SQLite. Never store plain text.
+5. Self-Character Overhead Indicator (Arrow) Optimization
 
-2.2 Dual-Track JWT Issuance Logic
-Guest Login API:
+Orientation Fix: Invert the overhead cone indicator so the tip points downward (pointing at the character) instead of upward.
 
-Receive a random UUID passed from the frontend.
-
-Issue a JWT with the Payload strictly structured as: {"uid": "passed_UUID", "role": "guest"}.
-
-Initialize the temporary context data for this guest in Redis.
-
-Official Login API:
-
-Query SQLite to verify the username and hashed password.
-
-Upon successful verification, issue a JWT with the Payload strictly structured as: {"uid": "real_user_ID", "role": "user"}.
-
-2.3 Nano Framework Integration & Lifecycle Management
-Handshake Authentication: Parse the incoming JWT in the Nano Handler's pre-processing logic or the first route. After verifying the signature is valid, use session.Set() and session.Push() to bind the uid and role to the current connection's *session.Session.
-
-Data Flow Differentiation:
-
-State changes during gameplay must be written to Redis at a high frequency.
-
-Register Nano's session.OnClosed callback function.
-
-When the WebSocket disconnects and triggers the callback, read session.Get("role"):
-
-If guest: Execute the Redis cleanup logic to destroy all temporary data associated with this UUID.
-
-If user: Execute the persistence logic to asynchronously dump the player's core asset data from Redis to the SQLite database.
-
-2.4 API Documentation Update
-Update the project documentation, adding/modifying the following content:
-
-Frontend specifications for Guest Mode (UUID stored in sessionStorage and discarded when the tab is closed).
-
-Frontend specifications for Official Accounts (JWT stored in localStorage).
-
-Input and output formats for the HTTP login/registration APIs.
-
-The format and process description for the first data packet carrying the JWT for authentication after establishing a WebSocket connection.
-
-Please scan the current codebase structure and directly generate the corresponding code modification plan, SQL initialization script, and the updated API Markdown documentation. Automatically execute the modifications once confirmed.
+Breathing Animation: Fix the current jagged/teleporting vertical movement. Implement a smooth mathematical curve (e.g., a sine wave) to create a fluid, natural up-and-down "breathing" hover animation.
