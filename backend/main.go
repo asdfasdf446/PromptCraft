@@ -1,17 +1,30 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
+	"promptcraft/backend/auth"
+	dbpkg "promptcraft/backend/db"
 	"promptcraft/backend/game"
+	"promptcraft/backend/handlers"
+	"promptcraft/backend/store"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
+
+type ClientSession struct {
+	UnitID string
+	UID    string // JWT uid claim
+	Role   string // "guest" | "user"
+}
 
 var (
 	upgrader = websocket.Upgrader{
@@ -20,9 +33,12 @@ var (
 		},
 	}
 
-	world   = game.NewWorld()
-	clients = make(map[*websocket.Conn]string) // conn -> unit_id
-	mu      sync.Mutex
+	world     = game.NewWorld()
+	clients   = make(map[*websocket.Conn]*ClientSession)
+	mu        sync.Mutex
+	sqliteDB  *sql.DB
+	rdb       *redis.Client
+	jwtSecret []byte
 )
 
 type ClientCommand struct {
@@ -62,6 +78,27 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// Auth handshake: first message must be {"type":"auth","token":"..."}
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var authMsg map[string]string
+	if err := conn.ReadJSON(&authMsg); err != nil {
+		log.Println("Auth read error:", err)
+		conn.WriteJSON(map[string]string{"type": "error", "code": "auth_failed", "message": "auth timeout or invalid message"})
+		return
+	}
+	conn.SetReadDeadline(time.Time{}) // clear deadline
+
+	if authMsg["type"] != "auth" || authMsg["token"] == "" {
+		conn.WriteJSON(map[string]string{"type": "error", "code": "auth_failed", "message": "first message must be auth"})
+		return
+	}
+
+	claims, err := auth.ValidateClaims(authMsg["token"], jwtSecret)
+	if err != nil {
+		conn.WriteJSON(map[string]string{"type": "error", "code": "auth_failed", "message": "invalid token"})
+		return
+	}
+
 	// Spawn unit for this player
 	unitID := uuid.New().String()
 	playerName := "Player-" + unitID[:8]
@@ -72,11 +109,20 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session := &ClientSession{UnitID: unitID, UID: claims.UID, Role: claims.Role}
 	mu.Lock()
-	clients[conn] = unitID
+	clients[conn] = session
 	mu.Unlock()
 
-	log.Printf("Player %s spawned at (%d, %d)\n", playerName, unit.X, unit.Y)
+	// Sync initial state to Redis
+	if err := store.WriteUnit(rdb, unit, claims.UID, claims.Role); err != nil {
+		log.Printf("Redis sync failed for unit %s: %v\n", unit.ID, err)
+	}
+
+	log.Printf("Player %s (%s) spawned at (%d, %d)\n", playerName, claims.Role, unit.X, unit.Y)
+
+	// Notify client of their unit ID
+	conn.WriteJSON(map[string]string{"type": "auth_ok", "unit_id": unitID})
 
 	// Send initial state
 	broadcastWorldState()
@@ -109,7 +155,25 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	delete(clients, conn)
 	mu.Unlock()
+
+	// Capture snapshot before removing from world
+	snapshot := world.Units[unitID]
+
 	world.RemoveUnit(unitID)
+
+	// Role-based cleanup
+	switch session.Role {
+	case "guest":
+		store.DeleteUnit(rdb, unitID)
+	case "user":
+		go func() {
+			if err := dbpkg.UpsertSnapshot(sqliteDB, session.UID, snapshot); err != nil {
+				log.Printf("Snapshot save failed for user %s: %v\n", session.UID, err)
+			}
+			store.DeleteUnit(rdb, unitID)
+		}()
+	}
+
 	broadcastWorldState()
 	log.Printf("Player %s disconnected\n", playerName)
 }
@@ -180,6 +244,24 @@ func qiRegenLoop() {
 }
 
 func main() {
+	// Load JWT secret
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("JWT_SECRET environment variable not set")
+	}
+	jwtSecret = []byte(secret)
+
+	// Init SQLite
+	sqliteDB = dbpkg.Open("./promptcraft.db")
+	defer sqliteDB.Close()
+
+	// Init Redis
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	rdb = store.NewClient(redisAddr)
+
 	// Start game loops
 	go tickLoop()
 	go qiRegenLoop()
@@ -187,6 +269,11 @@ func main() {
 	// Serve static files (frontend)
 	fs := http.FileServer(http.Dir("../frontend/dist"))
 	http.Handle("/", fs)
+
+	// Auth endpoints
+	http.HandleFunc("/register", handlers.RegisterHandler(sqliteDB))
+	http.HandleFunc("/login", handlers.LoginHandler(sqliteDB, jwtSecret))
+	http.HandleFunc("/guest", handlers.GuestHandler(rdb, jwtSecret))
 
 	// WebSocket endpoint
 	http.HandleFunc("/ws", handleWebSocket)

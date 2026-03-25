@@ -1,4 +1,5 @@
-import { createSignal, createEffect } from 'solid-js';
+import { createSignal } from 'solid-js';
+import { getAuthToken } from './auth';
 
 export interface UnitState {
   id: string;
@@ -43,8 +44,16 @@ export function connectWebSocket() {
 
   ws = new WebSocket(wsUrl);
 
-  ws.onopen = () => {
+  ws.onopen = async () => {
     console.log('[WebSocket] ✅ Connected successfully');
+    try {
+      const token = await getAuthToken();
+      ws!.send(JSON.stringify({ type: 'auth', token }));
+      console.log('[WebSocket] 🔐 Auth message sent');
+    } catch (err) {
+      console.error('[WebSocket] ❌ Failed to get auth token:', err);
+      ws!.close();
+    }
   };
 
   ws.onmessage = (event) => {
@@ -52,6 +61,18 @@ export function connectWebSocket() {
 
     try {
       const data = JSON.parse(event.data);
+
+      // Handle auth responses
+      if (data.type === 'auth_ok') {
+        console.log('[WebSocket] 🎮 Auth OK! Unit ID:', data.unit_id);
+        localStorage.setItem('myUnitId', data.unit_id);
+        return;
+      }
+
+      if (data.type === 'error') {
+        console.error('[WebSocket] ❌ Server error:', data.code, data.message);
+        return;
+      }
 
       if (data.error) {
         console.error('[WebSocket] ❌ Server error:', data.error);
@@ -61,7 +82,6 @@ export function connectWebSocket() {
       console.log('[WebSocket] 📊 World state update:', {
         tick: data.tick,
         unitCount: data.units?.length || 0,
-        units: data.units,
         actionCount: data.actions?.length || 0
       });
 
@@ -76,16 +96,10 @@ export function connectWebSocket() {
 
       setWorldState(data);
 
-      // Store my unit ID on first world state after connection
-      const currentMyUnitId = localStorage.getItem('myUnitId');
-
-      if (!currentMyUnitId && data.units && data.units.length > 0) {
-        // Find the newest unit (last in array, just spawned)
-        const lastUnit = data.units[data.units.length - 1];
-        localStorage.setItem('myUnitId', lastUnit.id);
-        console.log('[WebSocket] 🎮 My unit ID set to:', lastUnit.id, 'Name:', lastUnit.name);
-      } else if (currentMyUnitId) {
-        const myUnit = data.units?.find((u: UnitState) => u.id === currentMyUnitId);
+      // Log my unit status
+      const myUnitId = localStorage.getItem('myUnitId');
+      if (myUnitId) {
+        const myUnit = data.units?.find((u: UnitState) => u.id === myUnitId);
         if (myUnit) {
           console.log('[WebSocket] 👤 My unit status:', {
             id: myUnit.id,
@@ -97,7 +111,7 @@ export function connectWebSocket() {
             queue: myUnit.action_queue
           });
         } else {
-          console.warn('[WebSocket] ⚠️ My unit not found in world state! ID:', currentMyUnitId);
+          console.warn('[WebSocket] ⚠️ My unit not found in world state! ID:', myUnitId);
         }
       }
     } catch (error) {
