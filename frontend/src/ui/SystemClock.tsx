@@ -1,5 +1,6 @@
 import { createSignal, onMount, onCleanup, createEffect } from 'solid-js';
 import { worldState } from '../network/WebSocketClient';
+import { currentDayPhase, cycleProgress } from '../game/gameState';
 
 export default function SystemClock() {
   const [currentTime, setCurrentTime] = createSignal(0);
@@ -40,6 +41,24 @@ export default function SystemClock() {
     clearInterval(countdownInterval);
   });
 
+  const phaseEmoji = () => {
+    switch (currentDayPhase()) {
+      case 'morning': return '🌅';
+      case 'afternoon': return '☀️';
+      case 'evening': return '🌇';
+      case 'midnight': return '🌙';
+    }
+  };
+
+  const phaseColor = () => {
+    switch (currentDayPhase()) {
+      case 'morning': return '#fbbf24';
+      case 'afternoon': return '#fde047';
+      case 'evening': return '#fb923c';
+      case 'midnight': return '#60a5fa';
+    }
+  };
+
   return (
     <div style={{
       position: 'absolute',
@@ -66,6 +85,22 @@ export default function SystemClock() {
       </div>
       <div style={{ 'margin-bottom': '10px' }}>
         <span style={{ color: '#4a9eff' }}>Next Tick In:</span> {nextTick()}s
+      </div>
+
+      {/* Day/Night Cycle */}
+      <div style={{ 'margin-bottom': '10px', 'padding-bottom': '10px', 'border-bottom': '1px solid #4a4a4a' }}>
+        <span style={{ color: '#4a9eff' }}>Time of Day:</span>{' '}
+        <span style={{ color: phaseColor() }}>
+          {phaseEmoji()} {currentDayPhase().charAt(0).toUpperCase() + currentDayPhase().slice(1)}
+        </span>
+        <div style={{ 'margin-top': '5px', background: '#2a2a2a', height: '6px', 'border-radius': '3px', overflow: 'hidden' }}>
+          <div style={{
+            width: `${cycleProgress() * 100}%`,
+            height: '100%',
+            background: phaseColor(),
+            transition: 'width 0.3s ease'
+          }} />
+        </div>
       </div>
 
       <div style={{ 'border-top': '1px solid #4a4a4a', 'padding-top': '10px' }}>

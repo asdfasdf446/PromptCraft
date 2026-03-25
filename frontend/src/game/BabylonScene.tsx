@@ -4,6 +4,7 @@ import {
   Scene,
   ArcRotateCamera,
   HemisphericLight,
+  DirectionalLight,
   Vector3,
   MeshBuilder,
   StandardMaterial,
@@ -12,10 +13,20 @@ import {
   PointerEventTypes,
   DynamicTexture,
   SceneLoader,
-  AbstractMesh
+  AbstractMesh,
+  Animation,
+  AnimationGroup
 } from '@babylonjs/core';
 import '@babylonjs/loaders/glTF';
 import { worldState, UnitState } from '../network/WebSocketClient';
+import {
+  wireframeMode,
+  gridVisible,
+  perfMonitorVisible,
+  setCurrentDayPhase,
+  setCycleProgress,
+  type DayPhase
+} from './gameState';
 
 interface Props {
   onUnitClick: (unit: UnitState) => void;
@@ -28,6 +39,10 @@ export default function BabylonScene(props: Props) {
   const unitMeshes = new Map<string, AbstractMesh>();
   const playerArrow = { mesh: null as Mesh | null };
   const actionIcons = new Map<string, { plane: Mesh; startTime: number }>();
+  const unitPrevPositions = new Map<string, { x: number; y: number }>();
+  const unitAnimationGroups = new Map<string, AnimationGroup[]>();
+  const borderMeshes: Mesh[] = [];
+  let sunLight: DirectionalLight;
 
   onMount(() => {
     // Initialize engine and scene
@@ -53,6 +68,11 @@ export default function BabylonScene(props: Props) {
     // Light
     const light = new HemisphericLight('light', new Vector3(0, 1, 0), scene);
     light.intensity = 0.8;
+
+    // Directional light (sunlight) for day/night cycle
+    sunLight = new DirectionalLight('sunLight', new Vector3(1, -1, 0.5), scene);
+    sunLight.intensity = 0.7;
+    sunLight.diffuse = new Color3(1, 0.9, 0.7);
 
     // Tile selection function for terrain variety
     const tileModels = [
@@ -105,6 +125,7 @@ export default function BabylonScene(props: Props) {
           vBorder.position = new Vector3(x + 0.5, 0.01, z);
           vBorder.rotation.x = Math.PI / 2;
           vBorder.material = borderMat;
+          borderMeshes.push(vBorder);
         }
 
         // Add horizontal border (bottom edge of cell)
@@ -114,6 +135,7 @@ export default function BabylonScene(props: Props) {
           hBorder.position = new Vector3(x, 0.01, z + 0.5);
           hBorder.rotation.x = Math.PI / 2;
           hBorder.material = borderMat;
+          borderMeshes.push(hBorder);
         }
       }
     }
@@ -178,6 +200,50 @@ export default function BabylonScene(props: Props) {
     engine.runRenderLoop(() => {
       scene.render();
 
+      // Day/Night Cycle (30 seconds per cycle)
+      const cycleTime = 30; // seconds
+      const time = Date.now() / 1000;
+      const phase = (time % cycleTime) / cycleTime; // 0 to 1
+      setCycleProgress(phase);
+
+      // Sun position: rotate around the scene
+      const sunAngle = phase * Math.PI * 2 - Math.PI / 2; // Start at sunrise
+      const sunHeight = Math.sin(sunAngle);
+      const sunHorizontal = Math.cos(sunAngle);
+      sunLight.direction = new Vector3(sunHorizontal, -Math.abs(sunHeight) - 0.3, 0.5).normalize();
+
+      // Color and intensity based on phase
+      let currentPhase: DayPhase;
+      if (phase < 0.25) { // Morning (0-7.5s)
+        currentPhase = 'morning';
+        const t = phase * 4;
+        sunLight.diffuse = new Color3(1, 0.85 + t * 0.1, 0.6 + t * 0.3);
+        sunLight.intensity = 0.5 + t * 0.3;
+        scene.clearColor = new Color3(0.3 + t * 0.2, 0.5 + t * 0.2, 0.8 + t * 0.2).toColor4();
+      } else if (phase < 0.5) { // Afternoon (7.5-15s)
+        currentPhase = 'afternoon';
+        sunLight.diffuse = new Color3(1, 0.95, 0.9);
+        sunLight.intensity = 0.8;
+        scene.clearColor = new Color3(0.4, 0.6, 1.0).toColor4();
+      } else if (phase < 0.75) { // Evening (15-22.5s)
+        currentPhase = 'evening';
+        const t = (phase - 0.5) * 4;
+        sunLight.diffuse = new Color3(1, 0.5 - t * 0.3, 0.2 - t * 0.15);
+        sunLight.intensity = 0.8 - t * 0.6;
+        scene.clearColor = new Color3(0.7 - t * 0.6, 0.4 - t * 0.35, 0.3 - t * 0.25).toColor4();
+      } else { // Midnight (22.5-30s)
+        currentPhase = 'midnight';
+        sunLight.diffuse = new Color3(0.2, 0.2, 0.4);
+        sunLight.intensity = 0.15;
+        scene.clearColor = new Color3(0.05, 0.05, 0.15).toColor4();
+      }
+      setCurrentDayPhase(currentPhase);
+
+      // Update FPS for debug bar
+      if ((window as any).__setDebugFps) {
+        (window as any).__setDebugFps(Math.round(engine.getFps()));
+      }
+
       // Update action icons (fade out after 3 seconds)
       const now = Date.now();
       for (const [id, icon] of actionIcons.entries()) {
@@ -198,6 +264,25 @@ export default function BabylonScene(props: Props) {
     // Handle resize
     window.addEventListener('resize', () => {
       engine.resize();
+    });
+  });
+
+  // Debug: Wireframe Mode
+  createEffect(() => {
+    if (!scene) return;
+    const enabled = wireframeMode();
+    scene.materials.forEach((mat) => {
+      if (mat instanceof StandardMaterial) {
+        mat.wireframe = enabled;
+      }
+    });
+  });
+
+  // Debug: Grid Visibility
+  createEffect(() => {
+    const visible = gridVisible();
+    borderMeshes.forEach(mesh => {
+      mesh.isVisible = visible;
     });
   });
 
@@ -230,13 +315,23 @@ export default function BabylonScene(props: Props) {
         const basePath = `/assets/models/${modelPath.join('/')}/`;
 
         SceneLoader.ImportMesh("", basePath, modelFile, scene,
-          (meshes) => {
+          (meshes, particleSystems, skeletons, animationGroups) => {
             if (meshes.length > 0) {
               const rootMesh = meshes[0];
               rootMesh.name = `unit_${unit.id}`;
               rootMesh.position = new Vector3(unit.x, 0.5, unit.y);
               rootMesh.scaling = new Vector3(0.5, 0.5, 0.5);
               unitMeshes.set(unit.id, rootMesh);
+
+              // Store animation groups for this unit
+              if (animationGroups && animationGroups.length > 0) {
+                unitAnimationGroups.set(unit.id, animationGroups);
+                console.log(`Unit ${unit.id} loaded with ${animationGroups.length} animations:`,
+                  animationGroups.map(ag => ag.name));
+              }
+
+              // Initialize previous position
+              unitPrevPositions.set(unit.id, { x: unit.x, y: unit.y });
             }
           },
           undefined,
@@ -257,8 +352,73 @@ export default function BabylonScene(props: Props) {
           }
         );
       } else {
-        // Update position for existing mesh
-        mesh.position = new Vector3(unit.x, 0.5, unit.y);
+        // Update position for existing mesh with smooth movement
+        const prevPos = unitPrevPositions.get(unit.id);
+
+        if (prevPos && (prevPos.x !== unit.x || prevPos.y !== unit.y)) {
+          // Position changed - animate movement
+          const startPos = new Vector3(prevPos.x, 0.5, prevPos.y);
+          const endPos = new Vector3(unit.x, 0.5, unit.y);
+
+          // Calculate rotation based on movement direction
+          const dx = unit.x - prevPos.x;
+          const dy = unit.y - prevPos.y;
+          let targetRotation = mesh.rotation.y;
+
+          if (dx > 0) targetRotation = Math.PI / 2; // East
+          else if (dx < 0) targetRotation = -Math.PI / 2; // West
+          else if (dy > 0) targetRotation = Math.PI; // South
+          else if (dy < 0) targetRotation = 0; // North
+
+          // Create position animation (2 seconds)
+          const posAnim = new Animation(
+            'moveAnim',
+            'position',
+            60,
+            Animation.ANIMATIONTYPE_VECTOR3,
+            Animation.ANIMATIONLOOPMODE_CONSTANT
+          );
+          posAnim.setKeys([
+            { frame: 0, value: startPos },
+            { frame: 120, value: endPos }
+          ]);
+
+          // Create rotation animation
+          const rotAnim = new Animation(
+            'rotAnim',
+            'rotation.y',
+            60,
+            Animation.ANIMATIONTYPE_FLOAT,
+            Animation.ANIMATIONLOOPMODE_CONSTANT
+          );
+          rotAnim.setKeys([
+            { frame: 0, value: mesh.rotation.y },
+            { frame: 30, value: targetRotation }
+          ]);
+
+          mesh.animations = [posAnim, rotAnim];
+          scene.beginAnimation(mesh, 0, 120, false);
+
+          // Play walk animation if available
+          const animGroups = unitAnimationGroups.get(unit.id);
+          if (animGroups) {
+            const walkAnim = animGroups.find(ag =>
+              ag.name.toLowerCase().includes('walk') ||
+              ag.name.toLowerCase().includes('run') ||
+              ag.name.toLowerCase().includes('move')
+            );
+            if (walkAnim) {
+              walkAnim.start(false, 1.0, walkAnim.from, walkAnim.to);
+              // Stop after 2 seconds
+              setTimeout(() => walkAnim.stop(), 2000);
+            } else {
+              console.warn(`Unit ${unit.id}: No walk animation found`);
+            }
+          }
+        }
+
+        // Update previous position
+        unitPrevPositions.set(unit.id, { x: unit.x, y: unit.y });
       }
     }
 
@@ -311,13 +471,44 @@ export default function BabylonScene(props: Props) {
         plane.material = mat;
 
         const ctx = texture.getContext();
-        ctx.font = 'bold 180px Arial';
+        // Clear canvas
+        ctx.clearRect(0, 0, 256, 256);
+
+        // Draw background circle
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.beginPath();
+        ctx.arc(128, 128, 100, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw border
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 8;
+        ctx.stroke();
+
+        // Draw emoji
+        ctx.font = 'bold 120px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🗨', 128, 128);
+        ctx.fillStyle = '#333';
+        ctx.fillText('💬', 128, 128);
         texture.update();
 
         actionIcons.set(iconId, { plane, startTime: Date.now() });
+
+        // Trigger attack animation if available
+        const animGroups = unitAnimationGroups.get(action.unit_id);
+        if (animGroups) {
+          const attackAnim = animGroups.find(ag =>
+            ag.name.toLowerCase().includes('attack') ||
+            ag.name.toLowerCase().includes('hit') ||
+            ag.name.toLowerCase().includes('strike')
+          );
+          if (attackAnim) {
+            attackAnim.start(false, 1.0, attackAnim.from, attackAnim.to);
+          } else {
+            console.warn(`Unit ${action.unit_id}: No attack animation found`);
+          }
+        }
       }
     }
   });

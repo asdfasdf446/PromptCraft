@@ -4,6 +4,7 @@ import CommandInput from './ui/CommandInput';
 import UnitPanel from './ui/UnitPanel';
 import SystemClock from './ui/SystemClock';
 import PlayerStatusPanel from './ui/PlayerStatusPanel';
+import DebugBar from './ui/DebugBar';
 import { connectWebSocket, sendCommand, worldState } from './network/WebSocketClient';
 
 export default function App() {
@@ -55,6 +56,7 @@ export default function App() {
       <BabylonScene onUnitClick={handleUnitClick} />
       <PlayerStatusPanel />
       <SystemClock />
+      <DebugBar />
       <CommandInput onSubmit={handleCommand} />
       <Show when={selectedUnit()}>
         <UnitPanel unit={selectedUnit()!} onClose={() => setSelectedUnit(null)} />
