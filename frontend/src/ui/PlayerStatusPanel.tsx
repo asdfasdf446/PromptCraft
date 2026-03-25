@@ -6,7 +6,8 @@ export default function PlayerStatusPanel() {
 
   createEffect(() => {
     const state = worldState();
-    const myUnitId = localStorage.getItem('myUnitId');
+    const myUnitId = sessionStorage.getItem('myUnitId');
+    console.log('[PlayerStatusPanel] 🔍 Reading myUnitId from sessionStorage (tab-local):', myUnitId);
 
     console.log('[PlayerStatusPanel] Update triggered:', {
       hasState: !!state,

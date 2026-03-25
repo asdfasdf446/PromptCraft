@@ -238,7 +238,7 @@ ws.run_forever()
 
 **Fields**:
 - `command` (string): Command to execute (see Commands section)
-- `unit_id` (string): Your unit's UUID (received in first world state)
+- `unit_id` (string): Your unit's UUID (received in `auth_ok` message)
 
 ### Server → Client (World State)
 
@@ -343,45 +343,62 @@ ws.run_forever()
 ```javascript
 const WebSocket = require('ws');
 
-const ws = new WebSocket('ws://192.168.80.190:8080/ws');
-let myUnitId = null;
+// Step 1: Get a guest token (or use POST /login for a user token)
+async function getToken() {
+  const res = await fetch('http://192.168.80.190:8080/guest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: '550e8400-e29b-41d4-a716-446655440000' })
+  });
+  const data = await res.json();
+  return data.token;
+}
 
-ws.on('open', () => {
-  console.log('Connected!');
-});
+async function main() {
+  const token = await getToken();
+  const ws = new WebSocket('ws://192.168.80.190:8080/ws');
+  let myUnitId = null;
 
-ws.on('message', (data) => {
-  const state = JSON.parse(data);
+  ws.on('open', () => {
+    // Step 2: Send auth message immediately after connecting
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    console.log('Connected, auth sent');
+  });
 
-  // Store unit ID from first message
-  if (!myUnitId && state.units.length > 0) {
-    myUnitId = state.units[state.units.length - 1].id;
-    console.log('My unit ID:', myUnitId);
-  }
+  ws.on('message', (data) => {
+    const msg = JSON.parse(data);
 
-  // Find my unit
-  const myUnit = state.units.find(u => u.id === myUnitId);
-  if (!myUnit) return;
+    // Step 3: Handle auth_ok to get your unit ID
+    if (msg.type === 'auth_ok') {
+      myUnitId = msg.unit_id;
+      console.log('Authenticated! Unit ID:', myUnitId);
+      return;
+    }
 
-  console.log(`Tick ${state.tick}: Position (${myUnit.x}, ${myUnit.y}), HP: ${myUnit.hp}, Qi: ${myUnit.qi}`);
+    if (msg.type === 'error') {
+      console.error('Error:', msg.code, msg.message);
+      return;
+    }
 
-  // Simple AI: move randomly if qi available and queue empty
-  if (myUnit.qi >= 1 && myUnit.action_queue.length === 0) {
-    const moves = ['move_up', 'move_down', 'move_left', 'move_right'];
-    const command = moves[Math.floor(Math.random() * moves.length)];
+    // Step 4: Handle world state updates
+    if (!myUnitId) return;
+    const myUnit = msg.units?.find(u => u.id === myUnitId);
+    if (!myUnit) return;
 
-    ws.send(JSON.stringify({
-      command: command,
-      unit_id: myUnitId
-    }));
+    console.log(`Tick ${msg.tick}: Position (${myUnit.x}, ${myUnit.y}), HP: ${myUnit.hp}, Qi: ${myUnit.qi}`);
 
-    console.log('Sent command:', command);
-  }
-});
+    if (myUnit.qi >= 1 && myUnit.action_queue.length === 0) {
+      const moves = ['move_up', 'move_down', 'move_left', 'move_right'];
+      const command = moves[Math.floor(Math.random() * moves.length)];
+      ws.send(JSON.stringify({ command, unit_id: myUnitId }));
+      console.log('Sent command:', command);
+    }
+  });
 
-ws.on('close', () => {
-  console.log('Disconnected');
-});
+  ws.on('close', () => console.log('Disconnected'));
+}
+
+main();
 ```
 
 ### Python Bot
@@ -390,52 +407,57 @@ ws.on('close', () => {
 import websocket
 import json
 import random
-import time
+import requests
+
+# Step 1: Get a guest token before connecting
+TOKEN = requests.post('http://192.168.80.190:8080/guest', json={
+    'uid': '550e8400-e29b-41d4-a716-446655440000'
+}).json()['token']
 
 my_unit_id = None
 
+def on_open(ws):
+    # Step 2: Send auth message immediately after connecting
+    ws.send(json.dumps({'type': 'auth', 'token': TOKEN}))
+    print('Connected, auth sent')
+
 def on_message(ws, message):
     global my_unit_id
-    state = json.loads(message)
+    msg = json.loads(message)
 
-    # Store unit ID from first message
-    if not my_unit_id and state['units']:
-        my_unit_id = state['units'][-1]['id']
-        print(f'My unit ID: {my_unit_id}')
+    # Step 3: Handle auth_ok to get your unit ID
+    if msg.get('type') == 'auth_ok':
+        my_unit_id = msg['unit_id']
+        print(f'Authenticated! Unit ID: {my_unit_id}')
+        return
 
-    # Find my unit
-    my_unit = next((u for u in state['units'] if u['id'] == my_unit_id), None)
+    if msg.get('type') == 'error':
+        print(f'Error: {msg["code"]} {msg["message"]}')
+        return
+
+    # Step 4: Handle world state updates
+    if not my_unit_id:
+        return
+    my_unit = next((u for u in msg['units'] if u['id'] == my_unit_id), None)
     if not my_unit:
         return
 
-    print(f"Tick {state['tick']}: Position ({my_unit['x']}, {my_unit['y']}), HP: {my_unit['hp']}, Qi: {my_unit['qi']}")
+    print(f"Tick {msg['tick']}: Position ({my_unit['x']}, {my_unit['y']}), HP: {my_unit['hp']}, Qi: {my_unit['qi']}")
 
-    # Simple AI: move randomly if qi available and queue empty
     if my_unit['qi'] >= 1 and len(my_unit['action_queue']) == 0:
-        moves = ['move_up', 'move_down', 'move_left', 'move_right']
-        command = random.choice(moves)
-
-        ws.send(json.dumps({
-            'command': command,
-            'unit_id': my_unit_id
-        }))
-
+        command = random.choice(['move_up', 'move_down', 'move_left', 'move_right'])
+        ws.send(json.dumps({'command': command, 'unit_id': my_unit_id}))
         print(f'Sent command: {command}')
-
-def on_open(ws):
-    print('Connected!')
 
 def on_close(ws, close_status_code, close_msg):
     print('Disconnected')
 
-# Connect
 ws = websocket.WebSocketApp(
     'ws://192.168.80.190:8080/ws',
-    on_message=on_message,
     on_open=on_open,
+    on_message=on_message,
     on_close=on_close
 )
-
 ws.run_forever()
 ```
 
@@ -444,7 +466,12 @@ ws.run_forever()
 ```python
 import websocket
 import json
+import requests
 from collections import deque
+
+TOKEN = requests.post('http://192.168.80.190:8080/guest', json={
+    'uid': '550e8400-e29b-41d4-a716-446655440001'
+}).json()['token']
 
 my_unit_id = None
 
@@ -472,14 +499,21 @@ def bfs_path(grid, start, goal):
 
     return []
 
+def on_open(ws):
+    ws.send(json.dumps({'type': 'auth', 'token': TOKEN}))
+
 def on_message(ws, message):
     global my_unit_id
-    state = json.loads(message)
+    msg = json.loads(message)
 
-    if not my_unit_id and state['units']:
-        my_unit_id = state['units'][-1]['id']
+    if msg.get('type') == 'auth_ok':
+        my_unit_id = msg['unit_id']
+        return
 
-    my_unit = next((u for u in state['units'] if u['id'] == my_unit_id), None)
+    if msg.get('type') == 'error' or not my_unit_id:
+        return
+
+    my_unit = next((u for u in msg['units'] if u['id'] == my_unit_id), None)
     if not my_unit:
         return
 
@@ -503,7 +537,9 @@ def on_message(ws, message):
                 'unit_id': my_unit_id
             }))
 
-ws = websocket.WebSocketApp('ws://192.168.80.190:8080/ws', on_message=on_message)
+ws = websocket.WebSocketApp('ws://192.168.80.190:8080/ws',
+                            on_open=on_open,
+                            on_message=on_message)
 ws.run_forever()
 ```
 

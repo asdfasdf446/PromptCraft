@@ -290,7 +290,8 @@ export default function BabylonScene(props: Props) {
     const state = worldState();
     if (!state || !scene) return;
 
-    const myUnitId = localStorage.getItem('myUnitId');
+    const myUnitId = sessionStorage.getItem('myUnitId');
+    console.log('[BabylonScene] 🎯 My unit ID (tab-local):', myUnitId);
 
     // Update units
     const currentUnitIds = new Set(state.units.map(u => u.id));

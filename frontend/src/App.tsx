@@ -1,22 +1,38 @@
-import { createSignal, onMount, onCleanup, Show } from 'solid-js';
+import { createSignal, onMount, Show } from 'solid-js';
 import BabylonScene from './game/BabylonScene';
 import CommandInput from './ui/CommandInput';
 import UnitPanel from './ui/UnitPanel';
 import SystemClock from './ui/SystemClock';
 import PlayerStatusPanel from './ui/PlayerStatusPanel';
 import DebugBar from './ui/DebugBar';
+import LoginScreen from './ui/LoginScreen';
 import { connectWebSocket, sendCommand, worldState } from './network/WebSocketClient';
 
 export default function App() {
   const [selectedUnit, setSelectedUnit] = createSignal<any>(null);
+  const [authenticated, setAuthenticated] = createSignal(false);
+
+  const handleAuthFailed = () => {
+    console.warn('[App] 🔒 Auth failed (token likely expired) — returning to login screen');
+    localStorage.removeItem('userToken');
+    setAuthenticated(false);
+  };
+
+  const handleAuth = (token: string) => {
+    setAuthenticated(true);
+    connectWebSocket(token, handleAuthFailed);
+  };
 
   onMount(() => {
-    console.log('[App] 🚀 Application mounted, connecting WebSocket...');
-    connectWebSocket();
+    const storedToken = localStorage.getItem('userToken');
+    if (storedToken) {
+      console.log('[App] 🔑 Found stored user token, auto-connecting...');
+      handleAuth(storedToken);
+    }
   });
 
   const handleCommand = (cmd: string) => {
-    const myUnitId = localStorage.getItem('myUnitId');
+    const myUnitId = sessionStorage.getItem('myUnitId');
     const myUnit = worldState()?.units.find(u => u.id === myUnitId);
 
     console.log('[App] 📝 Command submitted:', {
@@ -33,7 +49,7 @@ export default function App() {
   };
 
   const handleUnitClick = (unit: any) => {
-    const myUnitId = localStorage.getItem('myUnitId');
+    const myUnitId = sessionStorage.getItem('myUnitId');
 
     console.log('[App] 🖱️ Unit clicked:', {
       clickedUnitId: unit.id,
@@ -60,6 +76,9 @@ export default function App() {
       <CommandInput onSubmit={handleCommand} />
       <Show when={selectedUnit()}>
         <UnitPanel unit={selectedUnit()!} onClose={() => setSelectedUnit(null)} />
+      </Show>
+      <Show when={!authenticated()}>
+        <LoginScreen onAuth={handleAuth} />
       </Show>
     </div>
   );

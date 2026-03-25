@@ -6,7 +6,7 @@ interface Props {
 }
 
 export default function UnitPanel(props: Props) {
-  const isMyUnit = () => props.unit.id === localStorage.getItem('myUnitId');
+  const isMyUnit = () => props.unit.id === sessionStorage.getItem('myUnitId');
 
   return (
     <div style={{

@@ -1,5 +1,4 @@
 import { createSignal } from 'solid-js';
-import { getAuthToken } from './auth';
 
 export interface UnitState {
   id: string;
@@ -27,10 +26,13 @@ export interface WorldState {
 
 const [worldState, setWorldState] = createSignal<WorldState | null>(null);
 let ws: WebSocket | null = null;
+let currentToken: string | null = null;
 
 export { worldState };
 
-export function connectWebSocket() {
+export function connectWebSocket(token: string, onAuthFailed?: () => void) {
+  currentToken = token;
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.hostname;
   const port = '8080';
@@ -38,22 +40,16 @@ export function connectWebSocket() {
 
   console.log('[WebSocket] Attempting to connect to:', wsUrl);
 
-  // Clear old unit ID on new connection
-  localStorage.removeItem('myUnitId');
-  console.log('[WebSocket] 🗑️ Cleared old unit ID from localStorage');
+  // Clear old unit ID on new connection (sessionStorage is per-tab, not shared)
+  sessionStorage.removeItem('myUnitId');
+  console.log('[WebSocket] 🗑️ Cleared old unit ID from sessionStorage (tab-local)');
 
   ws = new WebSocket(wsUrl);
 
-  ws.onopen = async () => {
+  ws.onopen = () => {
     console.log('[WebSocket] ✅ Connected successfully');
-    try {
-      const token = await getAuthToken();
-      ws!.send(JSON.stringify({ type: 'auth', token }));
-      console.log('[WebSocket] 🔐 Auth message sent');
-    } catch (err) {
-      console.error('[WebSocket] ❌ Failed to get auth token:', err);
-      ws!.close();
-    }
+    ws!.send(JSON.stringify({ type: 'auth', token: currentToken }));
+    console.log('[WebSocket] 🔐 Auth message sent');
   };
 
   ws.onmessage = (event) => {
@@ -65,12 +61,18 @@ export function connectWebSocket() {
       // Handle auth responses
       if (data.type === 'auth_ok') {
         console.log('[WebSocket] 🎮 Auth OK! Unit ID:', data.unit_id);
-        localStorage.setItem('myUnitId', data.unit_id);
+        console.log('[WebSocket] 💾 Storing unit ID in sessionStorage (tab-local, not shared with other tabs)');
+        sessionStorage.setItem('myUnitId', data.unit_id);
         return;
       }
 
       if (data.type === 'error') {
         console.error('[WebSocket] ❌ Server error:', data.code, data.message);
+        if (data.code === 'auth_failed') {
+          console.warn('[WebSocket] 🔒 Auth failed — stopping reconnect, notifying app');
+          currentToken = null; // prevent reconnect loop
+          onAuthFailed?.();
+        }
         return;
       }
 
@@ -97,7 +99,7 @@ export function connectWebSocket() {
       setWorldState(data);
 
       // Log my unit status
-      const myUnitId = localStorage.getItem('myUnitId');
+      const myUnitId = sessionStorage.getItem('myUnitId');
       if (myUnitId) {
         const myUnit = data.units?.find((u: UnitState) => u.id === myUnitId);
         if (myUnit) {
@@ -125,9 +127,12 @@ export function connectWebSocket() {
 
   ws.onclose = (event) => {
     console.log('[WebSocket] 🔌 Disconnected. Code:', event.code, 'Reason:', event.reason);
-    localStorage.removeItem('myUnitId');
-    console.log('[WebSocket] 🔄 Reconnecting in 3 seconds...');
-    setTimeout(connectWebSocket, 3000);
+    sessionStorage.removeItem('myUnitId');
+    console.log('[WebSocket] 🗑️ Cleared myUnitId from sessionStorage on disconnect');
+    if (currentToken) {
+      console.log('[WebSocket] 🔄 Reconnecting in 3 seconds...');
+      setTimeout(() => connectWebSocket(currentToken!), 3000);
+    }
   };
 }
 
