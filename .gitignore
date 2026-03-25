@@ -23,3 +23,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 .cache/
+
+# Database
+*.db
