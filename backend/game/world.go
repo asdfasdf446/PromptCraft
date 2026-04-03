@@ -31,6 +31,22 @@ var availableModels = []string{
 	"animals/animal-tiger.glb",
 }
 
+type EnqueueCommandResultCode string
+
+const (
+	EnqueueCommandResultQueued         EnqueueCommandResultCode = "queued"
+	EnqueueCommandResultInvalidCommand EnqueueCommandResultCode = "invalid_command"
+	EnqueueCommandResultQueueFull      EnqueueCommandResultCode = "queue_full"
+	EnqueueCommandResultUnitNotFound   EnqueueCommandResultCode = "unit_not_found"
+)
+
+type EnqueueCommandResult struct {
+	Accepted    bool
+	Code        EnqueueCommandResultCode
+	QueueLength int
+	QueueLimit  int
+}
+
 type World struct {
 	mu            sync.RWMutex
 	Grid          [GridSize][GridSize]*Unit
@@ -290,14 +306,25 @@ func isAttackCommand(cmd string) bool {
 	return cmd == "attack_up" || cmd == "attack_down" || cmd == "attack_left" || cmd == "attack_right"
 }
 
-func (w *World) EnqueueCommandForUnit(unitID, cmd string) bool {
+func (w *World) EnqueueCommandForUnit(unitID, cmd string) EnqueueCommandResult {
 	w.mu.RLock()
 	unit, ok := w.Units[unitID]
 	w.mu.RUnlock()
 
 	if !ok {
-		return false
+		return EnqueueCommandResult{
+			Accepted:    false,
+			Code:        EnqueueCommandResultUnitNotFound,
+			QueueLength: 0,
+			QueueLimit:  MaxActionQueueLength,
+		}
 	}
 
-	return unit.EnqueueCommand(cmd)
+	result := unit.EnqueueCommand(cmd)
+	return EnqueueCommandResult{
+		Accepted:    result.Accepted,
+		Code:        EnqueueCommandResultCode(result.Code),
+		QueueLength: result.QueueLength,
+		QueueLimit:  result.QueueLimit,
+	}
 }

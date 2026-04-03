@@ -24,6 +24,7 @@ The game is designed to be scriptable: all commands are exposed via WebSocket AP
 - **Qi Resource System**: 10 qi max, regenerates 1 per 10 seconds
 - **Tick-Based Execution**: World processes all commands every 5 seconds
 - **Scriptable API**: Full WebSocket API for automation (see [API.md](API.md))
+- **Command Acknowledgements**: Every submitted command returns an explicit accepted/rejected result
 
 ---
 
@@ -112,6 +113,8 @@ Frontend starts on `http://localhost:5173`
 ## Scripting
 
 All game commands are available via WebSocket API. Write scripts in any language to automate your units.
+
+Every submitted command now returns a structured `command_result` acknowledgement before later execution is reflected in shared world-state updates.
 
 See [API.md](API.md) for full WebSocket protocol documentation and example scripts.
 

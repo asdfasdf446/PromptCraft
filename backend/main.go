@@ -3,9 +3,11 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -33,17 +35,33 @@ var (
 		},
 	}
 
-	world     = game.NewWorld()
-	clients   = make(map[*websocket.Conn]*ClientSession)
-	mu        sync.Mutex
-	sqliteDB  *sql.DB
-	rdb       *redis.Client
-	jwtSecret []byte
+	world       = game.NewWorld()
+	clients     = make(map[*websocket.Conn]*ClientSession)
+	mu          sync.Mutex
+	sqliteDB    *sql.DB
+	rdb         *redis.Client
+	jwtSecret   []byte
+	debugLogger *log.Logger
 )
 
 type ClientCommand struct {
-	Command string `json:"command"`
-	UnitID  string `json:"unit_id"`
+	Type      string `json:"type,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	Command   string `json:"command"`
+	UnitID    string `json:"unit_id"`
+}
+
+type CommandResult struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	UnitID      string `json:"unit_id,omitempty"`
+	Command     string `json:"command,omitempty"`
+	Status      string `json:"status"`
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	QueueLength int    `json:"queue_length,omitempty"`
+	QueueLimit  int    `json:"queue_limit,omitempty"`
+	Tick        int64  `json:"tick"`
 }
 
 type UnitState struct {
@@ -68,6 +86,48 @@ type ServerWorldState struct {
 	Units   []UnitState   `json:"units"`
 	Tick    int64         `json:"tick"`
 	Actions []ActionEvent `json:"actions,omitempty"`
+}
+
+func writeCommandResult(conn *websocket.Conn, result CommandResult) {
+	if err := conn.WriteJSON(result); err != nil {
+		log.Println("Command result write error:", err)
+	}
+}
+
+func debugLog(format string, args ...any) {
+	if debugLogger != nil {
+		debugLogger.Printf(format, args...)
+	}
+}
+
+func initDebugLogger() {
+	if err := os.MkdirAll("./logs", 0755); err != nil {
+		log.Printf("Debug log directory init failed: %v\n", err)
+		return
+	}
+
+	logFile, err := os.OpenFile(filepath.Join("./logs", "debug.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("Debug log init failed: %v\n", err)
+		return
+	}
+
+	debugLogger = log.New(io.MultiWriter(logFile), "[debug] ", log.LstdFlags)
+}
+
+func buildCommandResult(cmd ClientCommand, unitID string, status string, code string, message string, queueLength int, queueLimit int) CommandResult {
+	return CommandResult{
+		Type:        "command_result",
+		RequestID:   cmd.RequestID,
+		UnitID:      unitID,
+		Command:     cmd.Command,
+		Status:      status,
+		Code:        code,
+		Message:     message,
+		QueueLength: queueLength,
+		QueueLimit:  queueLimit,
+		Tick:        world.Tick,
+	}
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -136,18 +196,45 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		if cmd.Type != "" && cmd.Type != "command" {
+			debugLog("command rejected request_id=%s code=malformed_message reason=unsupported_message_type player=%s", cmd.RequestID, playerName)
+			writeCommandResult(conn, buildCommandResult(cmd, unitID, "rejected", "malformed_message", "unsupported message type", 0, game.MaxActionQueueLength))
+			continue
+		}
+
+		if cmd.Command == "" || cmd.UnitID == "" {
+			debugLog("command rejected request_id=%s code=malformed_message reason=missing_fields player=%s", cmd.RequestID, playerName)
+			writeCommandResult(conn, buildCommandResult(cmd, unitID, "rejected", "malformed_message", "command and unit_id are required", 0, game.MaxActionQueueLength))
+			continue
+		}
+
 		// Validate unit ownership
 		if cmd.UnitID != unitID {
+			debugLog("command rejected request_id=%s code=unit_mismatch player=%s unit_id=%s session_unit_id=%s", cmd.RequestID, playerName, cmd.UnitID, unitID)
+			writeCommandResult(conn, buildCommandResult(cmd, unitID, "rejected", "unit_mismatch", "unit_id does not belong to this connection", 0, game.MaxActionQueueLength))
 			continue
 		}
 
 		// Enqueue command
-		if world.EnqueueCommandForUnit(unitID, cmd.Command) {
+		result := world.EnqueueCommandForUnit(unitID, cmd.Command)
+		if result.Accepted {
 			log.Printf("Player %s queued command: %s\n", playerName, cmd.Command)
+			debugLog("command accepted request_id=%s player=%s unit_id=%s command=%s queue_length=%d queue_limit=%d", cmd.RequestID, playerName, unitID, cmd.Command, result.QueueLength, result.QueueLimit)
+			writeCommandResult(conn, buildCommandResult(cmd, unitID, "accepted", string(result.Code), "command queued", result.QueueLength, result.QueueLimit))
 			// Broadcast updated state immediately so UI reflects the queue
 			broadcastWorldState()
 		} else {
-			conn.WriteJSON(map[string]string{"error": "指令错误"})
+			message := "command rejected"
+			switch result.Code {
+			case game.EnqueueCommandResultInvalidCommand:
+				message = "invalid command"
+			case game.EnqueueCommandResultQueueFull:
+				message = "action queue is full"
+			case game.EnqueueCommandResultUnitNotFound:
+				message = "unit not found"
+			}
+			debugLog("command rejected request_id=%s player=%s unit_id=%s command=%s code=%s queue_length=%d queue_limit=%d", cmd.RequestID, playerName, unitID, cmd.Command, result.Code, result.QueueLength, result.QueueLimit)
+			writeCommandResult(conn, buildCommandResult(cmd, unitID, "rejected", string(result.Code), message, result.QueueLength, result.QueueLimit))
 		}
 	}
 
@@ -250,6 +337,10 @@ func main() {
 		log.Fatal("JWT_SECRET environment variable not set")
 	}
 	jwtSecret = []byte(secret)
+
+	// Init debug logger
+	initDebugLogger()
+	debugLog("debug logger initialized")
 
 	// Init SQLite
 	sqliteDB = dbpkg.Open("./promptcraft.db")

@@ -1,7 +1,9 @@
-import { createSignal, Show, onCleanup } from 'solid-js';
+import { createSignal, Show } from 'solid-js';
+import type { CommandResult } from '../network/WebSocketClient';
 
 interface Props {
-  onSubmit: (command: string) => void;
+  onSubmit: (command: string) => boolean;
+  commandResult: CommandResult | null;
 }
 
 export default function CommandInput(props: Props) {
@@ -20,7 +22,6 @@ export default function CommandInput(props: Props) {
     console.log('[CommandInput] 📥 Form submitted:', { input: cmd });
 
     if (cmd) {
-      // Split by semicolon for batch commands
       const commands = cmd.split(';').map(c => c.trim()).filter(c => c.length > 0);
 
       console.log('[CommandInput] 🔍 Parsed commands:', commands);
@@ -31,29 +32,24 @@ export default function CommandInput(props: Props) {
         return;
       }
 
-      // Validate commands
-      const validCommands = new Set([
-        'move_up', 'move_down', 'move_left', 'move_right',
-        'attack_up', 'attack_down', 'attack_left', 'attack_right'
-      ]);
+      const submittedCommands: string[] = [];
+      commands.forEach(command => {
+        console.log('[CommandInput] 📤 Submitting command:', command);
+        if (props.onSubmit(command)) {
+          submittedCommands.push(command);
+        }
+      });
 
-      const invalidCommands = commands.filter(c => !validCommands.has(c));
-
-      if (invalidCommands.length > 0) {
-        console.error('[CommandInput] ❌ Invalid commands detected:', invalidCommands);
-        showFeedback(`Invalid command(s): ${invalidCommands.join(', ')}`, 'error');
+      if (submittedCommands.length === 0) {
+        showFeedback('Could not submit commands', 'error');
         return;
       }
 
-      console.log('[CommandInput] ✅ All commands valid, submitting...');
-
-      // Submit each command
-      commands.forEach(command => {
-        console.log('[CommandInput] 📤 Submitting command:', command);
-        props.onSubmit(command);
-      });
-
-      showFeedback(`${commands.length} command(s) queued`, 'success');
+      if (submittedCommands.length === 1) {
+        showFeedback(`Submitted ${submittedCommands[0]}; waiting for server confirmation`, 'success');
+      } else {
+        showFeedback(`Submitted ${submittedCommands.length} commands; waiting for per-command server confirmation`, 'success');
+      }
       setInput('');
     }
   };
@@ -82,6 +78,25 @@ export default function CommandInput(props: Props) {
           'white-space': 'nowrap'
         }}>
           {feedback()!.message}
+        </div>
+      </Show>
+
+      <Show when={props.commandResult}>
+        <div style={{
+          position: 'absolute',
+          bottom: '110px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          padding: '8px 16px',
+          'border-radius': '4px',
+          background: props.commandResult!.status === 'accepted' ? '#2d5f2d' : '#5f2d2d',
+          border: `2px solid ${props.commandResult!.status === 'accepted' ? '#4a9e4a' : '#9e4a4a'}`,
+          color: '#fff',
+          'font-family': 'Courier New, monospace',
+          'font-size': '12px',
+          'white-space': 'nowrap'
+        }}>
+          {props.commandResult!.status === 'accepted' ? 'Queued' : 'Rejected'}: {props.commandResult!.command} ({props.commandResult!.message})
         </div>
       </Show>
 

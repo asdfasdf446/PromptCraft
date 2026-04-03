@@ -6,7 +6,7 @@ import SystemClock from './ui/SystemClock';
 import PlayerStatusPanel from './ui/PlayerStatusPanel';
 import DebugBar from './ui/DebugBar';
 import LoginScreen from './ui/LoginScreen';
-import { connectWebSocket, sendCommand, worldState } from './network/WebSocketClient';
+import { connectWebSocket, sendCommand, worldState, lastCommandResult } from './network/WebSocketClient';
 
 export default function App() {
   const [selectedUnit, setSelectedUnit] = createSignal<any>(null);
@@ -43,9 +43,11 @@ export default function App() {
 
     if (myUnit) {
       sendCommand(cmd, myUnit.id);
-    } else {
-      console.error('[App] ❌ Cannot send command - my unit not found');
+      return true;
     }
+
+    console.error('[App] ❌ Cannot send command - my unit not found');
+    return false;
   };
 
   const handleUnitClick = (unit: any) => {
@@ -73,7 +75,7 @@ export default function App() {
       <PlayerStatusPanel />
       <SystemClock />
       <DebugBar />
-      <CommandInput onSubmit={handleCommand} />
+      <CommandInput onSubmit={handleCommand} commandResult={lastCommandResult()} />
       <Show when={selectedUnit()}>
         <UnitPanel unit={selectedUnit()!} onClose={() => setSelectedUnit(null)} />
       </Show>

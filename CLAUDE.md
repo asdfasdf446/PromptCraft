@@ -95,8 +95,10 @@ Access at `http://[server-ip]:8080` (LAN accessible)
 - Grid is 30×30, indexed 0-29
 
 ### WebSocket Protocol
-- Client → Server: `{"command": "move_up", "unit_id": "uuid"}`
-- Server → Client: `{"units": [...], "tick": 123, "actions": [...]}`
+- First client message must be auth: `{"type": "auth", "token": "jwt"}`
+- Command messages may include correlation metadata: `{"type": "command", "request_id": "cmd-1", "command": "move_up", "unit_id": "uuid"}`
+- Server may send control messages before world state: `{"type": "auth_ok", "unit_id": "uuid"}` and `{"type": "command_result", "request_id": "cmd-1", "status": "accepted|rejected", "code": "queued|invalid_command|unit_mismatch|unit_not_found|queue_full|malformed_message", "message": "...", "queue_length": 1, "queue_limit": 10, "tick": 123}`
+- World-state broadcasts remain: `{"units": [...], "tick": 123, "actions": [...]}`
 - Actions array contains events from last tick (for visual feedback)
 
 ## Common Pitfalls

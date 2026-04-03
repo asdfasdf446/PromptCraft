@@ -74,6 +74,7 @@ const (
 
 - **Unit struct**: HP, Qi, position, action queue, model path
 - **EnqueueCommand()**: Validates command string, appends to queue (max 10)
+- **Command results**: Every submission returns an explicit accepted/rejected result code to the originating client
 - **NewUnit()**: Constructor with default HP=10, Qi=10, Attack=1
 
 ---
@@ -117,6 +118,21 @@ Valid commands: `move_up`, `move_down`, `move_left`, `move_right`, `attack_up`, 
 
 ```json
 {
+  "type": "command_result",
+  "request_id": "cmd-1",
+  "status": "accepted",
+  "code": "queued",
+  "message": "command queued",
+  "queue_length": 1,
+  "queue_limit": 10,
+  "tick": 42
+}
+```
+
+Command acknowledgements are sent to the submitting client for every command. Shared world state is still broadcast after accepted queue updates and on every tick.
+
+```json
+{
   "units": [{"id": "...", "x": 5, "y": 10, "hp": 10, "qi": 7, "name": "...", "model": "animals/animal-cat.glb", "action_queue": ["move_up"]}],
   "tick": 42,
   "actions": [{"unit_id": "...", "action": "move_up", "x": 5, "y": 9}]
@@ -138,7 +154,7 @@ Broadcast happens after every tick (5s) and after every command received.
 
 ## Logging
 
-Server logs to stdout:
+Server logs to stdout, and protocol/debug details are additionally written to `backend/logs/debug.log`.
 
 ```
 Unit Player-abc spawned with model animals/animal-cat.glb at (12, 7)
@@ -146,6 +162,12 @@ Unit Player-abc executed move_up to (12, 6)
 Unit Player-abc executed attack_right, hit Player-xyz for 1 damage (HP: 10 -> 9)
 Unit Player-xyz was destroyed
 Unit Player-abc move failed (occupied=true, collision=false)
+```
+
+Clear local debug logs with:
+
+```bash
+../scripts/clear_logs.sh
 ```
 
 ---

@@ -9,6 +9,7 @@ backend/backend
 
 # Logs
 *.log
+backend/logs/
 
 # OS files
 .DS_Store

@@ -170,6 +170,7 @@ export function sendCommand(command: string, unitId: string): void
 
 - **Dev server** (`npm run dev`): Hot reload, proxies WebSocket to backend
 - **Production build** (`npm run build`): Outputs to `dist/`, served by Go backend
+- **Command feedback**: The UI now waits for backend `command_result` acknowledgements before presenting queue success/failure
 - **TypeScript**: Strict mode enabled
 - **Vite**: Build tool and dev server
 

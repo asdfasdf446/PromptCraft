@@ -2,6 +2,23 @@ package game
 
 import "sync"
 
+const MaxActionQueueLength = 10
+
+type EnqueueResultCode string
+
+const (
+	EnqueueResultQueued         EnqueueResultCode = "queued"
+	EnqueueResultInvalidCommand EnqueueResultCode = "invalid_command"
+	EnqueueResultQueueFull      EnqueueResultCode = "queue_full"
+)
+
+type EnqueueResult struct {
+	Accepted    bool
+	Code        EnqueueResultCode
+	QueueLength int
+	QueueLimit  int
+}
+
 type Unit struct {
 	ID          string
 	Name        string
@@ -29,7 +46,7 @@ func NewUnit(id, name, model string, x, y int) *Unit {
 	}
 }
 
-func (u *Unit) EnqueueCommand(cmd string) bool {
+func (u *Unit) EnqueueCommand(cmd string) EnqueueResult {
 	// Validate command
 	validCommands := map[string]bool{
 		"move_up": true, "move_down": true, "move_left": true, "move_right": true,
@@ -37,11 +54,31 @@ func (u *Unit) EnqueueCommand(cmd string) bool {
 	}
 
 	if !validCommands[cmd] {
-		return false
+		return EnqueueResult{
+			Accepted:    false,
+			Code:        EnqueueResultInvalidCommand,
+			QueueLength: len(u.ActionQueue),
+			QueueLimit:  MaxActionQueueLength,
+		}
 	}
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
+	if len(u.ActionQueue) >= MaxActionQueueLength {
+		return EnqueueResult{
+			Accepted:    false,
+			Code:        EnqueueResultQueueFull,
+			QueueLength: len(u.ActionQueue),
+			QueueLimit:  MaxActionQueueLength,
+		}
+	}
+
 	u.ActionQueue = append(u.ActionQueue, cmd)
-	return true
+	return EnqueueResult{
+		Accepted:    true,
+		Code:        EnqueueResultQueued,
+		QueueLength: len(u.ActionQueue),
+		QueueLimit:  MaxActionQueueLength,
+	}
 }

@@ -231,14 +231,55 @@ ws.run_forever()
 
 ```json
 {
+  "type": "command",
+  "request_id": "cmd-1",
   "command": "move_up",
   "unit_id": "9f43e268-677d-4d22-9bf3-124acf9531b7"
 }
 ```
 
 **Fields**:
+- `type` (string, optional): When present, must be `command`
+- `request_id` (string, optional): Client-generated correlation ID echoed in the acknowledgement
 - `command` (string): Command to execute (see Commands section)
 - `unit_id` (string): Your unit's UUID (received in `auth_ok` message)
+
+### Server → Client (Command Result)
+
+```json
+{
+  "type": "command_result",
+  "request_id": "cmd-1",
+  "unit_id": "9f43e268-677d-4d22-9bf3-124acf9531b7",
+  "command": "move_up",
+  "status": "accepted",
+  "code": "queued",
+  "message": "command queued",
+  "queue_length": 1,
+  "queue_limit": 10,
+  "tick": 42
+}
+```
+
+**Fields**:
+- `type` (string): Always `command_result`
+- `request_id` (string, optional): Echo of the client request ID
+- `unit_id` (string): Unit UUID associated with the connection
+- `command` (string): Submitted command
+- `status` (string): `accepted` or `rejected`
+- `code` (string): Machine-readable result code
+- `message` (string): Human-readable explanation
+- `queue_length` (int): Queue length after evaluation
+- `queue_limit` (int): Maximum queue length (10)
+- `tick` (int): Current world tick when the result was generated
+
+**Result codes**:
+- `queued`
+- `invalid_command`
+- `unit_mismatch`
+- `unit_not_found`
+- `queue_full`
+- `malformed_message`
 
 ### Server → Client (World State)
 
@@ -281,6 +322,8 @@ ws.run_forever()
 - `tick` (int): Current world tick number
 - `actions` (array): Actions executed in last tick (optional)
 
+Command acknowledgements indicate whether a submission was accepted into the queue. World-state updates remain the authoritative shared view for later execution results.
+
 ---
 
 ## Commands
@@ -296,8 +339,9 @@ ws.run_forever()
 
 **Notes**:
 - Movement fails if target cell is occupied or out of bounds
-- Failed moves still consume qi
+- Failed moves still consume qi when blocked by occupancy/collision; out-of-bounds moves are dropped without an action event
 - Multiple units cannot move to same cell in one tick
+- At most 10 commands may be queued per unit
 
 ### Attack Commands
 

@@ -24,11 +24,26 @@ export interface WorldState {
   actions?: ActionEvent[];
 }
 
+export interface CommandResult {
+  type: 'command_result';
+  request_id?: string;
+  unit_id?: string;
+  command?: string;
+  status: 'accepted' | 'rejected';
+  code: string;
+  message: string;
+  queue_length?: number;
+  queue_limit?: number;
+  tick: number;
+}
+
 const [worldState, setWorldState] = createSignal<WorldState | null>(null);
+const [lastCommandResult, setLastCommandResult] = createSignal<CommandResult | null>(null);
 let ws: WebSocket | null = null;
 let currentToken: string | null = null;
+let nextRequestId = 1;
 
-export { worldState };
+export { worldState, lastCommandResult };
 
 export function connectWebSocket(token: string, onAuthFailed?: () => void) {
   currentToken = token;
@@ -73,6 +88,12 @@ export function connectWebSocket(token: string, onAuthFailed?: () => void) {
           currentToken = null; // prevent reconnect loop
           onAuthFailed?.();
         }
+        return;
+      }
+
+      if (data.type === 'command_result') {
+        console.log('[WebSocket] ✅ Command result:', data);
+        setLastCommandResult(data as CommandResult);
         return;
       }
 
@@ -138,7 +159,7 @@ export function connectWebSocket(token: string, onAuthFailed?: () => void) {
 
 export function sendCommand(command: string, unitId: string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    const payload = { command, unit_id: unitId };
+    const payload = { type: 'command', request_id: `cmd-${nextRequestId++}`, command, unit_id: unitId };
     console.log('[WebSocket] 📤 Sending command:', payload);
     ws.send(JSON.stringify(payload));
   } else {
