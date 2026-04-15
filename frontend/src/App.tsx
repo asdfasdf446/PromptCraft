@@ -72,6 +72,29 @@ export default function App() {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <BabylonScene onUnitClick={handleUnitClick} />
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        left: '290px',
+        padding: '12px 14px',
+        background: 'rgba(22, 26, 32, 0.82)',
+        border: '1px solid rgba(148, 163, 184, 0.4)',
+        'border-radius': '8px',
+        color: '#e5e7eb',
+        'font-family': 'Courier New, monospace',
+        'font-size': '12px',
+        'line-height': '1.5',
+        'z-index': '1000',
+        'max-width': '260px',
+        'pointer-events': 'none'
+      }}>
+        <div style={{ 'font-weight': 'bold', 'margin-bottom': '6px', color: '#fbbf24' }}>Spectator Camera</div>
+        <div>Click scene: lock cursor</div>
+        <div>Mouse: look around</div>
+        <div>WASD / Arrows: move</div>
+        <div>Space / Ctrl: up / down</div>
+        <div>Esc: release cursor</div>
+      </div>
       <PlayerStatusPanel />
       <SystemClock />
       <DebugBar />

@@ -2,7 +2,6 @@ import { onMount, onCleanup, createEffect } from 'solid-js';
 import {
   Engine,
   Scene,
-  ArcRotateCamera,
   HemisphericLight,
   DirectionalLight,
   Vector3,
@@ -18,15 +17,19 @@ import {
   Animation,
   AnimationGroup,
   Material,
+  ShadowGenerator,
 } from '@babylonjs/core';
 import '@babylonjs/loaders/glTF';
 import { worldState, UnitState, TileState } from '../network/WebSocketClient';
+import { SpectatorFlyCamera } from './SpectatorFlyCamera';
 import {
   wireframeMode,
   gridVisible,
   setCurrentDayPhase,
   setCycleProgress,
-  type DayPhase
+  graphicsTier,
+  type DayPhase,
+  type GraphicsTier,
 } from './gameState';
 
 interface Props {
@@ -43,6 +46,89 @@ const stackHeight = 1.2;
 const moveAnimationFrames = 30;
 const moveAnimationFps = 60;
 const deathFadeMs = 700;
+const boardCenter = new Vector3(14.5, 0, 14.5);
+const baseBackgroundColor = new Color3(0.13, 0.16, 0.19);
+const borderColor = new Color3(0.16, 0.2, 0.24);
+
+type LightingKeyframe = {
+  directionalIntensity: number;
+  directionalDiffuse: Color3;
+  ambientIntensity: number;
+  ambientDiffuse: Color3;
+  ambientGround: Color3;
+  skyColor: Color3;
+};
+
+type GraphicsTierConfig = {
+  hardwareScalingLevel: number;
+  shadowMapSize: number;
+  shadowsEnabled: boolean;
+  shadowBias: number;
+  shadowNormalBias: number;
+  shadowDarkness: number;
+};
+
+const graphicsTierConfig: Record<GraphicsTier, GraphicsTierConfig> = {
+  low: {
+    hardwareScalingLevel: 1.5,
+    shadowMapSize: 0,
+    shadowsEnabled: false,
+    shadowBias: 0,
+    shadowNormalBias: 0,
+    shadowDarkness: 0,
+  },
+  medium: {
+    hardwareScalingLevel: 1.2,
+    shadowMapSize: 1024,
+    shadowsEnabled: true,
+    shadowBias: 0.0008,
+    shadowNormalBias: 0.02,
+    shadowDarkness: 0.28,
+  },
+  high: {
+    hardwareScalingLevel: 1,
+    shadowMapSize: 2048,
+    shadowsEnabled: true,
+    shadowBias: 0.0004,
+    shadowNormalBias: 0.01,
+    shadowDarkness: 0.38,
+  },
+};
+
+const lightingKeyframes: Record<DayPhase, LightingKeyframe> = {
+  morning: {
+    directionalIntensity: 0.92,
+    directionalDiffuse: new Color3(1.0, 0.86, 0.66),
+    ambientIntensity: 0.72,
+    ambientDiffuse: new Color3(0.62, 0.72, 0.92),
+    ambientGround: new Color3(0.22, 0.2, 0.21),
+    skyColor: new Color3(0.35, 0.42, 0.52),
+  },
+  afternoon: {
+    directionalIntensity: 1.08,
+    directionalDiffuse: new Color3(1.0, 0.97, 0.9),
+    ambientIntensity: 0.78,
+    ambientDiffuse: new Color3(0.78, 0.84, 0.94),
+    ambientGround: new Color3(0.24, 0.24, 0.25),
+    skyColor: new Color3(0.29, 0.35, 0.42),
+  },
+  evening: {
+    directionalIntensity: 0.55,
+    directionalDiffuse: new Color3(0.94, 0.52, 0.34),
+    ambientIntensity: 0.6,
+    ambientDiffuse: new Color3(0.54, 0.46, 0.56),
+    ambientGround: new Color3(0.18, 0.16, 0.18),
+    skyColor: new Color3(0.18, 0.2, 0.25),
+  },
+  midnight: {
+    directionalIntensity: 0.2,
+    directionalDiffuse: new Color3(0.42, 0.5, 0.72),
+    ambientIntensity: 0.42,
+    ambientDiffuse: new Color3(0.2, 0.28, 0.42),
+    ambientGround: new Color3(0.08, 0.08, 0.12),
+    skyColor: new Color3(0.11, 0.13, 0.16),
+  },
+};
 
 type EntityRenderRecord = {
   unitId: string;
@@ -70,6 +156,10 @@ export default function BabylonScene(props: Props) {
   const borderMeshes: Mesh[] = [];
   const pendingLoads = new Map<string, number>();
   let sunLight: DirectionalLight;
+  let ambientLight: HemisphericLight;
+  let shadowGenerator: ShadowGenerator | null = null;
+  let spectatorFlyCamera: SpectatorFlyCamera | null = null;
+  let rtsCameraController: RtsCameraController | null = null;
 
   const getTargetPosition = (gridX: number, gridY: number, stackLevel: number, yOffset: number) => (
     new Vector3(gridX, yOffset + stackLevel * stackHeight, gridY)
@@ -161,19 +251,109 @@ export default function BabylonScene(props: Props) {
     const fallbackMesh = MeshBuilder.CreateBox(`unit_${unit.id}`, { size: 0.8 }, scene);
     fallbackMesh.position = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, yOffset);
     const mat = new StandardMaterial(`unitMat_${unit.id}`, scene);
-    mat.diffuseColor = unit.kind === 'food' ? new Color3(0.2, 0.8, 0.2) : new Color3(0.9, 0.7, 0.3);
+    mat.diffuseColor = unit.kind === 'food' ? new Color3(0.44, 0.68, 0.36) : new Color3(0.91, 0.78, 0.46);
+    mat.specularColor = new Color3(0.05, 0.05, 0.05);
+    mat.roughness = 0.8;
+    mat.metallic = 0.2;
     fallbackMesh.material = mat;
     return fallbackMesh;
   };
+
+  const applyStandardMaterialDefaults = (mesh: AbstractMesh) => {
+    const materials = new Set<Material>();
+    if (mesh.material) materials.add(mesh.material);
+    for (const child of mesh.getChildMeshes()) {
+      if (child.material) materials.add(child.material);
+    }
+    for (const material of materials) {
+      if (material instanceof StandardMaterial) {
+        material.specularColor = new Color3(0.05, 0.05, 0.05);
+        material.roughness = 0.8;
+        material.metallic = 0.2;
+      } else if (material instanceof PBRMaterial) {
+        material.roughness = 0.8;
+        material.metallic = 0.2;
+      }
+    }
+  };
+
+  const configureShadowCaster = (mesh: AbstractMesh) => {
+    if (!shadowGenerator) return;
+    shadowGenerator.addShadowCaster(mesh, true);
+    mesh.receiveShadows = false;
+  };
+
+  const configureShadowReceiver = (mesh: AbstractMesh) => {
+    mesh.receiveShadows = !!shadowGenerator;
+  };
+
+  const applyGraphicsTier = (tier: GraphicsTier) => {
+    const config = graphicsTierConfig[tier];
+    engine.setHardwareScalingLevel(config.hardwareScalingLevel);
+
+    if (!scene || !sunLight) return;
+
+    if (!config.shadowsEnabled) {
+      shadowGenerator?.dispose();
+      shadowGenerator = null;
+      for (const record of unitRecords.values()) {
+        record.root.receiveShadows = false;
+        for (const child of record.descendants) {
+          child.receiveShadows = false;
+        }
+      }
+      for (const mesh of tileMeshes.values()) {
+        mesh.receiveShadows = false;
+      }
+      return;
+    }
+
+    const shadowMap = shadowGenerator?.getShadowMap();
+    const shadowMapWidth = shadowMap ? shadowMap.getSize().width : 0;
+    const needsNewShadowGenerator = !shadowGenerator || shadowMapWidth !== config.shadowMapSize;
+    if (needsNewShadowGenerator) {
+      shadowGenerator?.dispose();
+      shadowGenerator = new ShadowGenerator(config.shadowMapSize, sunLight);
+      shadowGenerator.usePercentageCloserFiltering = tier === 'high';
+    }
+
+    shadowGenerator.bias = config.shadowBias;
+    shadowGenerator.normalBias = config.shadowNormalBias;
+    shadowGenerator.setDarkness(config.shadowDarkness);
+
+    for (const record of unitRecords.values()) {
+      configureShadowCaster(record.root);
+    }
+    for (const mesh of tileMeshes.values()) {
+      configureShadowReceiver(mesh);
+    }
+  };
+
+  const lerpColor = (from: Color3, to: Color3, t: number) => new Color3(
+    from.r + (to.r - from.r) * t,
+    from.g + (to.g - from.g) * t,
+    from.b + (to.b - from.b) * t,
+  );
+
+  const interpolateLighting = (from: LightingKeyframe, to: LightingKeyframe, t: number): LightingKeyframe => ({
+    directionalIntensity: from.directionalIntensity + (to.directionalIntensity - from.directionalIntensity) * t,
+    directionalDiffuse: lerpColor(from.directionalDiffuse, to.directionalDiffuse, t),
+    ambientIntensity: from.ambientIntensity + (to.ambientIntensity - from.ambientIntensity) * t,
+    ambientDiffuse: lerpColor(from.ambientDiffuse, to.ambientDiffuse, t),
+    ambientGround: lerpColor(from.ambientGround, to.ambientGround, t),
+    skyColor: lerpColor(from.skyColor, to.skyColor, t),
+  });
 
   const createUnitRecord = (unit: UnitState, root: AbstractMesh, animationGroups: AnimationGroup[] = []) => {
     const descendants = root.getChildMeshes();
     setMeshNameRecursive(root, unit.id);
     root.scaling = unit.kind === 'food' ? new Vector3(0.8, 0.8, 0.8) : new Vector3(0.5, 0.5, 0.5);
+    applyStandardMaterialDefaults(root);
     root.computeWorldMatrix(true);
     const { min } = root.getHierarchyBoundingVectors(true);
     const yOffset = Math.max(0, -min.y);
     root.position = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, yOffset);
+    configureShadowCaster(root);
     const { idleGroups, walkGroups } = classifyAnimationGroups(animationGroups);
     const record: EntityRenderRecord = {
       unitId: unit.id,
@@ -206,27 +386,37 @@ export default function BabylonScene(props: Props) {
   };
 
   onMount(() => {
-    engine = new Engine(canvas, true, { adaptToDeviceRatio: true });
+    engine = new Engine(canvas, true, { adaptToDeviceRatio: true, antialias: true });
     scene = new Scene(engine);
-    scene.clearColor = new Color3(0.1, 0.1, 0.1).toColor4();
+    scene.collisionsEnabled = true;
+    scene.clearColor = baseBackgroundColor.toColor4();
+    scene.imageProcessingConfiguration.contrast = 1.05;
+    scene.imageProcessingConfiguration.exposure = 1.0;
 
-    const camera = new ArcRotateCamera('camera', -Math.PI / 2, Math.PI / 4, 50, new Vector3(15, 0, 15), scene);
-    camera.attachControl(canvas, true);
-    camera.lowerRadiusLimit = 20;
-    camera.upperRadiusLimit = 80;
-    camera.lowerBetaLimit = 0.1;
-    camera.upperBetaLimit = Math.PI / 2.5;
+    spectatorFlyCamera = new SpectatorFlyCamera({
+      scene,
+      canvas,
+      position: new Vector3(15, 4, 24),
+    });
 
-    const light = new HemisphericLight('light', new Vector3(0, 1, 0), scene);
-    light.intensity = 0.8;
+    ambientLight = new HemisphericLight('light', new Vector3(0, 1, 0), scene);
+    ambientLight.intensity = lightingKeyframes.afternoon.ambientIntensity;
+    ambientLight.diffuse = lightingKeyframes.afternoon.ambientDiffuse.clone();
+    ambientLight.groundColor = lightingKeyframes.afternoon.ambientGround.clone();
 
-    sunLight = new DirectionalLight('sunLight', new Vector3(1, -1, 0.5), scene);
-    sunLight.intensity = 0.7;
-    sunLight.diffuse = new Color3(1, 0.9, 0.7);
+    sunLight = new DirectionalLight('sunLight', new Vector3(0.4, -1, 0.4), scene);
+    sunLight.position = new Vector3(20, 28, 20);
+    sunLight.intensity = lightingKeyframes.afternoon.directionalIntensity;
+    sunLight.diffuse = lightingKeyframes.afternoon.directionalDiffuse.clone();
+    sunLight.specular = new Color3(0.12, 0.12, 0.12);
+
+    applyGraphicsTier(graphicsTier());
 
     const borderMat = new StandardMaterial('borderMat', scene);
-    borderMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
-    borderMat.specularColor = new Color3(0, 0, 0);
+    borderMat.diffuseColor = borderColor;
+    borderMat.specularColor = new Color3(0.04, 0.04, 0.04);
+    borderMat.roughness = 0.8;
+    borderMat.metallic = 0.2;
 
     for (let x = 0; x < 30; x++) {
       for (let z = 0; z < 30; z++) {
@@ -252,7 +442,10 @@ export default function BabylonScene(props: Props) {
       marker.position = position;
       const mat = new StandardMaterial(`markerMat_${text}`, scene);
       mat.diffuseColor = color;
-      mat.emissiveColor = color.scale(0.3);
+      mat.emissiveColor = color.scale(0.18);
+      mat.specularColor = new Color3(0.04, 0.04, 0.04);
+      mat.roughness = 0.8;
+      mat.metallic = 0.2;
       marker.material = mat;
 
       const plane = MeshBuilder.CreatePlane(`label_${text}`, { width: 5, height: 2 }, scene);
@@ -281,7 +474,10 @@ export default function BabylonScene(props: Props) {
     createDirectionMarker('East (Right)', new Vector3(33, 0.3, 15), new Color3(1, 1, 0.3));
 
     scene.onPointerObservable.add((pointerInfo) => {
-      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+      if (pointerInfo.type === PointerEventTypes.POINTERUP) {
+        const pointerEvent = pointerInfo.event as PointerEvent;
+        if (pointerEvent.button !== 0) return;
+        if (rtsCameraController?.consumeClickSuppression()) return;
         const pickResult = scene.pick(scene.pointerX, scene.pointerY);
         if (pickResult.hit && pickResult.pickedMesh) {
           const meshName = pickResult.pickedMesh.name;
@@ -316,7 +512,6 @@ export default function BabylonScene(props: Props) {
     });
 
     engine.runRenderLoop(() => {
-      scene.render();
       const cycleTime = 180;
       const time = Date.now() / 1000;
       const phase = (time % cycleTime) / cycleTime;
@@ -324,43 +519,34 @@ export default function BabylonScene(props: Props) {
       const sunAngle = phase * Math.PI * 2 - Math.PI / 2;
       const sunHeight = Math.sin(sunAngle);
       const sunHorizontal = Math.cos(sunAngle);
-      sunLight.direction = new Vector3(sunHorizontal, -Math.abs(sunHeight) - 0.3, 0.5).normalize();
+      sunLight.direction = new Vector3(sunHorizontal, -Math.max(0.25, Math.abs(sunHeight)), 0.45).normalize();
+      sunLight.position = boardCenter.add(sunLight.direction.scale(-35));
 
-      const kfMidnight  = { i: 0.15, dr: 0.2, dg: 0.2,  db: 0.4,  sr: 0.05, sg: 0.05, sb: 0.15 };
-      const kfMorning   = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.5,  sg: 0.7,  sb: 1.0  };
-      const kfAfternoon = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.4,  sg: 0.6,  sb: 1.0  };
-      const kfEvening   = { i: 0.2,  dr: 1.0, dg: 0.2,  db: 0.05, sr: 0.1,  sg: 0.05, sb: 0.05 };
-      type Kf = typeof kfMidnight;
-      const lerpKf = (a: Kf, b: Kf, t: number): Kf => ({
-        i:  a.i  + (b.i  - a.i)  * t,
-        dr: a.dr + (b.dr - a.dr) * t,
-        dg: a.dg + (b.dg - a.dg) * t,
-        db: a.db + (b.db - a.db) * t,
-        sr: a.sr + (b.sr - a.sr) * t,
-        sg: a.sg + (b.sg - a.sg) * t,
-        sb: a.sb + (b.sb - a.sb) * t,
-      });
-
-      let kf: Kf;
+      let kf: LightingKeyframe;
       let currentPhase: DayPhase;
       if (phase < 0.25) {
         currentPhase = 'morning';
-        kf = lerpKf(kfMidnight, kfMorning, phase * 4);
+        kf = interpolateLighting(lightingKeyframes.midnight, lightingKeyframes.morning, phase * 4);
       } else if (phase < 0.5) {
         currentPhase = 'afternoon';
-        kf = lerpKf(kfMorning, kfAfternoon, (phase - 0.25) * 4);
+        kf = interpolateLighting(lightingKeyframes.morning, lightingKeyframes.afternoon, (phase - 0.25) * 4);
       } else if (phase < 0.75) {
         currentPhase = 'evening';
-        kf = lerpKf(kfAfternoon, kfEvening, (phase - 0.5) * 4);
+        kf = interpolateLighting(lightingKeyframes.afternoon, lightingKeyframes.evening, (phase - 0.5) * 4);
       } else {
         currentPhase = 'midnight';
-        kf = lerpKf(kfEvening, kfMidnight, (phase - 0.75) * 4);
+        kf = interpolateLighting(lightingKeyframes.evening, lightingKeyframes.midnight, (phase - 0.75) * 4);
       }
 
-      sunLight.diffuse = new Color3(kf.dr, kf.dg, kf.db);
-      sunLight.intensity = kf.i;
-      scene.clearColor = new Color3(kf.sr, kf.sg, kf.sb).toColor4();
+      sunLight.diffuse = kf.directionalDiffuse;
+      sunLight.intensity = kf.directionalIntensity;
+      ambientLight.diffuse = kf.ambientDiffuse;
+      ambientLight.groundColor = kf.ambientGround;
+      ambientLight.intensity = kf.ambientIntensity;
+      scene.clearColor = kf.skyColor.toColor4();
       setCurrentDayPhase(currentPhase);
+
+      scene.render();
 
       if ((window as any).__setDebugFps) {
         (window as any).__setDebugFps(Math.round(engine.getFps()));
@@ -379,6 +565,11 @@ export default function BabylonScene(props: Props) {
     });
 
     window.addEventListener('resize', () => engine.resize());
+  });
+
+  createEffect(() => {
+    if (!scene || !engine) return;
+    applyGraphicsTier(graphicsTier());
   });
 
   createEffect(() => {
@@ -423,8 +614,10 @@ export default function BabylonScene(props: Props) {
         SceneLoader.ImportMesh('', '/assets/models/nature/', model, scene, (meshes) => {
           if (meshes.length > 0) {
             const root = meshes[0];
+            applyStandardMaterialDefaults(root);
             root.name = `tile_${key}`;
             root.position = new Vector3(tile.grid_x, 0, tile.grid_y);
+            configureShadowReceiver(root);
             tileMeshes.set(key, root);
           }
         });
@@ -432,8 +625,12 @@ export default function BabylonScene(props: Props) {
         const tileMesh = MeshBuilder.CreateGround(`tile_${key}`, { width: 1, height: 1 }, scene);
         tileMesh.position = new Vector3(tile.grid_x, 0, tile.grid_y);
         const mat = new StandardMaterial(`tilemat_${key}`, scene);
-        mat.diffuseColor = tile.kind === 'obstacle' ? new Color3(0.1, 0.3, 0.8) : tile.kind === 'fertile' ? new Color3(0.2, 0.6, 0.2) : new Color3(0.45, 0.3, 0.15);
+        mat.diffuseColor = tile.kind === 'obstacle' ? new Color3(0.11, 0.2, 0.34) : tile.kind === 'fertile' ? new Color3(0.25, 0.43, 0.22) : new Color3(0.36, 0.29, 0.2);
+        mat.specularColor = new Color3(0.03, 0.03, 0.03);
+        mat.roughness = 0.8;
+        mat.metallic = 0.2;
         tileMesh.material = mat;
+        configureShadowReceiver(tileMesh);
         tileMeshes.set(key, tileMesh);
       }
     }
@@ -456,9 +653,13 @@ export default function BabylonScene(props: Props) {
           const obstacleMesh = MeshBuilder.CreateBox(`unit_${unit.id}`, { size: 0.9 }, scene);
           obstacleMesh.position = targetPosition;
           const mat = new StandardMaterial(`unitMat_${unit.id}`, scene);
-          mat.diffuseColor = new Color3(0.6, 0.6, 0.6);
+          mat.diffuseColor = new Color3(0.45, 0.49, 0.55);
+          mat.specularColor = new Color3(0.04, 0.04, 0.04);
+          mat.roughness = 0.8;
+          mat.metallic = 0.2;
           mat.wireframe = true;
           obstacleMesh.material = mat;
+          obstacleMesh.checkCollisions = true;
           obstacleMesh.isVisible = wireframeMode();
           record = createUnitRecord(unit, obstacleMesh);
           record.yOffset = 0.5;
@@ -568,6 +769,8 @@ export default function BabylonScene(props: Props) {
   });
 
   onCleanup(() => {
+    spectatorFlyCamera?.dispose();
+    rtsCameraController?.dispose();
     engine.dispose();
   });
 

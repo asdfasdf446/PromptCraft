@@ -2,7 +2,9 @@ import { createSignal, onMount, onCleanup } from 'solid-js';
 import {
   wireframeMode, setWireframeMode,
   gridVisible, setGridVisible,
-  perfMonitorVisible, setPerfMonitorVisible
+  perfMonitorVisible, setPerfMonitorVisible,
+  graphicsTier, setGraphicsTier,
+  type GraphicsTier,
 } from '../game/gameState';
 
 export default function DebugBar() {
@@ -32,6 +34,10 @@ export default function DebugBar() {
   (window as any).__setDebugFps = setFps;
   (window as any).__setDebugLatency = setLatency;
 
+  const handleTierChange = (value: string) => {
+    setGraphicsTier(value as GraphicsTier);
+  };
+
   return (
     <div style={{
       position: 'absolute',
@@ -48,10 +54,9 @@ export default function DebugBar() {
       'z-index': '1000'
     }}>
       <div style={{ 'margin-bottom': '12px', 'font-size': '14px', 'font-weight': 'bold', color: '#fbbf24' }}>
-        🛠️ Debug Tools
+        Debug Tools
       </div>
 
-      {/* Wireframe Mode */}
       <label style={{ display: 'block', 'margin-bottom': '8px', cursor: 'pointer', 'user-select': 'none' }}>
         <input
           type="checkbox"
@@ -62,7 +67,6 @@ export default function DebugBar() {
         <span>Wireframe Mode</span>
       </label>
 
-      {/* Grid Helper */}
       <label style={{ display: 'block', 'margin-bottom': '8px', cursor: 'pointer', 'user-select': 'none' }}>
         <input
           type="checkbox"
@@ -73,7 +77,26 @@ export default function DebugBar() {
         <span>Grid Borders</span>
       </label>
 
-      {/* Performance Monitor */}
+      <label style={{ display: 'block', 'margin-bottom': '8px', color: '#ddd' }}>
+        <span style={{ display: 'block', 'margin-bottom': '4px' }}>Graphics Tier</span>
+        <select
+          value={graphicsTier()}
+          onChange={(e) => handleTierChange(e.currentTarget.value)}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            background: '#1f2937',
+            color: '#fff',
+            border: '1px solid #4b5563',
+            'border-radius': '4px'
+          }}
+        >
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+
       <label style={{ display: 'block', 'margin-bottom': '12px', cursor: 'pointer', 'user-select': 'none' }}>
         <input
           type="checkbox"
@@ -84,7 +107,6 @@ export default function DebugBar() {
         <span>Performance Monitor</span>
       </label>
 
-      {/* Performance Stats */}
       {perfMonitorVisible() && (
         <div style={{
           'border-top': '1px solid #666',
@@ -98,8 +120,11 @@ export default function DebugBar() {
           <div style={{ 'margin-bottom': '4px' }}>
             <span style={{ color: '#4a9eff' }}>Memory:</span> {memory()}
           </div>
-          <div>
+          <div style={{ 'margin-bottom': '4px' }}>
             <span style={{ color: '#4a9eff' }}>Latency:</span> {latency()}
+          </div>
+          <div>
+            <span style={{ color: '#4a9eff' }}>Tier:</span> {graphicsTier()}
           </div>
         </div>
       )}
