@@ -33,7 +33,7 @@ export default function App() {
 
   const handleCommand = (cmd: string) => {
     const myUnitId = sessionStorage.getItem('myUnitId');
-    const myUnit = worldState()?.units.find(u => u.id === myUnitId);
+    const myUnit = worldState()?.units.find(u => u.id === myUnitId && u.kind === 'player');
 
     console.log('[App] 📝 Command submitted:', {
       command: cmd,

@@ -1,11 +1,19 @@
 import { createSignal } from 'solid-js';
 
+export interface TileState {
+  grid_x: number;
+  grid_y: number;
+  kind: 'normal' | 'fertile' | 'obstacle';
+}
+
 export interface UnitState {
   id: string;
-  x: number;
-  y: number;
+  kind: 'player' | 'food' | 'obstacle';
+  grid_x: number;
+  grid_y: number;
+  stack_level: number;
   hp: number;
-  qi: number;
+  qi?: number;
   name: string;
   model: string;
   action_queue: string[];
@@ -16,12 +24,27 @@ export interface ActionEvent {
   action: string;
   x: number;
   y: number;
+  stack_level: number;
+  target_x: number;
+  target_y: number;
+  target_stack_level: number;
+}
+
+export interface DeathEvent {
+  unit_id: string;
+  kind: 'player' | 'food' | 'obstacle';
+  grid_x: number;
+  grid_y: number;
+  stack_level: number;
+  model: string;
 }
 
 export interface WorldState {
+  tiles: TileState[];
   units: UnitState[];
   tick: number;
   actions?: ActionEvent[];
+  deaths?: DeathEvent[];
 }
 
 export interface CommandResult {
@@ -45,114 +68,64 @@ let nextRequestId = 1;
 
 export { worldState, lastCommandResult };
 
+function isWorldStatePayload(data: unknown): data is WorldState {
+  if (!data || typeof data !== 'object') return false;
+  const candidate = data as Partial<WorldState>;
+  return Array.isArray(candidate.tiles) && Array.isArray(candidate.units) && typeof candidate.tick === 'number';
+}
+
 export function connectWebSocket(token: string, onAuthFailed?: () => void) {
   currentToken = token;
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.hostname;
-  const port = '8080';
+  const port = '8081';
   const wsUrl = `${protocol}//${host}:${port}/ws`;
 
-  console.log('[WebSocket] Attempting to connect to:', wsUrl);
-
-  // Clear old unit ID on new connection (sessionStorage is per-tab, not shared)
   sessionStorage.removeItem('myUnitId');
-  console.log('[WebSocket] 🗑️ Cleared old unit ID from sessionStorage (tab-local)');
-
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    console.log('[WebSocket] ✅ Connected successfully');
     ws!.send(JSON.stringify({ type: 'auth', token: currentToken }));
-    console.log('[WebSocket] 🔐 Auth message sent');
   };
 
   ws.onmessage = (event) => {
-    console.log('[WebSocket] 📨 Received message:', event.data);
-
     try {
       const data = JSON.parse(event.data);
 
-      // Handle auth responses
       if (data.type === 'auth_ok') {
-        console.log('[WebSocket] 🎮 Auth OK! Unit ID:', data.unit_id);
-        console.log('[WebSocket] 💾 Storing unit ID in sessionStorage (tab-local, not shared with other tabs)');
         sessionStorage.setItem('myUnitId', data.unit_id);
         return;
       }
 
       if (data.type === 'error') {
-        console.error('[WebSocket] ❌ Server error:', data.code, data.message);
         if (data.code === 'auth_failed') {
-          console.warn('[WebSocket] 🔒 Auth failed — stopping reconnect, notifying app');
-          currentToken = null; // prevent reconnect loop
+          currentToken = null;
           onAuthFailed?.();
         }
         return;
       }
 
       if (data.type === 'command_result') {
-        console.log('[WebSocket] ✅ Command result:', data);
         setLastCommandResult(data as CommandResult);
         return;
       }
 
-      if (data.error) {
-        console.error('[WebSocket] ❌ Server error:', data.error);
+      if (isWorldStatePayload(data)) {
+        setWorldState(data);
         return;
       }
 
-      console.log('[WebSocket] 📊 World state update:', {
-        tick: data.tick,
-        unitCount: data.units?.length || 0,
-        actionCount: data.actions?.length || 0
-      });
-
-      // Log action events
-      if (data.actions && data.actions.length > 0) {
-        console.log('[WebSocket] ⚡ Action events:', data.actions);
-        data.actions.forEach((action: ActionEvent) => {
-          const unit = data.units?.find((u: UnitState) => u.id === action.unit_id);
-          console.log(`[Action] ${unit?.name || action.unit_id} executed ${action.action} at (${action.x}, ${action.y})`);
-        });
-      }
-
-      setWorldState(data);
-
-      // Log my unit status
-      const myUnitId = sessionStorage.getItem('myUnitId');
-      if (myUnitId) {
-        const myUnit = data.units?.find((u: UnitState) => u.id === myUnitId);
-        if (myUnit) {
-          console.log('[WebSocket] 👤 My unit status:', {
-            id: myUnit.id,
-            name: myUnit.name,
-            position: `(${myUnit.x}, ${myUnit.y})`,
-            hp: myUnit.hp,
-            qi: myUnit.qi,
-            queueLength: myUnit.action_queue.length,
-            queue: myUnit.action_queue
-          });
-        } else {
-          console.warn('[WebSocket] ⚠️ My unit not found in world state! ID:', myUnitId);
-        }
-      }
+      console.warn('[WebSocket] Ignoring unexpected message shape:', data);
     } catch (error) {
-      console.error('[WebSocket] ❌ Failed to parse message:', error);
+      console.error('[WebSocket] Failed to parse message:', error);
     }
   };
 
-  ws.onerror = (error) => {
-    console.error('[WebSocket] ❌ Connection error:', error);
-  };
-
-  ws.onclose = (event) => {
-    console.log('[WebSocket] 🔌 Disconnected. Code:', event.code, 'Reason:', event.reason);
+  ws.onclose = () => {
     sessionStorage.removeItem('myUnitId');
-    console.log('[WebSocket] 🗑️ Cleared myUnitId from sessionStorage on disconnect');
     if (currentToken) {
-      console.log('[WebSocket] 🔄 Reconnecting in 3 seconds...');
-      setTimeout(() => connectWebSocket(currentToken!), 3000);
+      setTimeout(() => connectWebSocket(currentToken!, onAuthFailed), 3000);
     }
   };
 }
@@ -160,9 +133,6 @@ export function connectWebSocket(token: string, onAuthFailed?: () => void) {
 export function sendCommand(command: string, unitId: string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     const payload = { type: 'command', request_id: `cmd-${nextRequestId++}`, command, unit_id: unitId };
-    console.log('[WebSocket] 📤 Sending command:', payload);
     ws.send(JSON.stringify(payload));
-  } else {
-    console.error('[WebSocket] ❌ Cannot send command - WebSocket not connected. State:', ws?.readyState);
   }
 }

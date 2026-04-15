@@ -4,12 +4,29 @@ import "sync"
 
 const MaxActionQueueLength = 10
 
+type UnitKind string
+
+type TileKind string
+
+const (
+	UnitKindPlayer   UnitKind = "player"
+	UnitKindFood     UnitKind = "food"
+	UnitKindObstacle UnitKind = "obstacle"
+)
+
+const (
+	TileKindNormal   TileKind = "normal"
+	TileKindFertile  TileKind = "fertile"
+	TileKindObstacle TileKind = "obstacle"
+)
+
 type EnqueueResultCode string
 
 const (
 	EnqueueResultQueued         EnqueueResultCode = "queued"
 	EnqueueResultInvalidCommand EnqueueResultCode = "invalid_command"
 	EnqueueResultQueueFull      EnqueueResultCode = "queue_full"
+	EnqueueResultWrongUnitKind  EnqueueResultCode = "wrong_unit_kind"
 )
 
 type EnqueueResult struct {
@@ -21,10 +38,12 @@ type EnqueueResult struct {
 
 type Unit struct {
 	ID          string
+	Kind        UnitKind
 	Name        string
 	Model       string
-	X           int
-	Y           int
+	GridX       int
+	GridY       int
+	StackLevel  int
 	HP          int
 	Qi          int
 	Attack      int
@@ -32,13 +51,15 @@ type Unit struct {
 	mu          sync.Mutex
 }
 
-func NewUnit(id, name, model string, x, y int) *Unit {
+func NewPlayerUnit(id, name, model string, gridX, gridY, stackLevel int) *Unit {
 	return &Unit{
 		ID:          id,
+		Kind:        UnitKindPlayer,
 		Name:        name,
 		Model:       model,
-		X:           x,
-		Y:           y,
+		GridX:       gridX,
+		GridY:       gridY,
+		StackLevel:  stackLevel,
 		HP:          10,
 		Qi:          10,
 		Attack:      1,
@@ -46,8 +67,56 @@ func NewUnit(id, name, model string, x, y int) *Unit {
 	}
 }
 
+func NewFoodUnit(id string, gridX, gridY, stackLevel int, model string) *Unit {
+	return &Unit{
+		ID:         id,
+		Kind:       UnitKindFood,
+		Name:       "Food",
+		Model:      model,
+		GridX:      gridX,
+		GridY:      gridY,
+		StackLevel: stackLevel,
+		HP:         3,
+		Attack:     0,
+	}
+}
+
+func NewObstacleUnit(id string, gridX, gridY, stackLevel int) *Unit {
+	return &Unit{
+		ID:         id,
+		Kind:       UnitKindObstacle,
+		Name:       "Obstacle",
+		Model:      "",
+		GridX:      gridX,
+		GridY:      gridY,
+		StackLevel: stackLevel,
+		HP:         1000,
+		Attack:     0,
+	}
+}
+
+func (u *Unit) CanReceiveCommands() bool {
+	return u.Kind == UnitKindPlayer
+}
+
+func (u *Unit) CanMove() bool {
+	return u.Kind == UnitKindPlayer
+}
+
+func (u *Unit) CanAttack() bool {
+	return u.Kind == UnitKindPlayer
+}
+
 func (u *Unit) EnqueueCommand(cmd string) EnqueueResult {
-	// Validate command
+	if !u.CanReceiveCommands() {
+		return EnqueueResult{
+			Accepted:    false,
+			Code:        EnqueueResultWrongUnitKind,
+			QueueLength: len(u.ActionQueue),
+			QueueLimit:  MaxActionQueueLength,
+		}
+	}
+
 	validCommands := map[string]bool{
 		"move_up": true, "move_down": true, "move_left": true, "move_right": true,
 		"attack_up": true, "attack_down": true, "attack_left": true, "attack_right": true,

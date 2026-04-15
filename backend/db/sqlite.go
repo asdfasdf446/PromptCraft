@@ -64,12 +64,19 @@ func UpsertSnapshot(db *sql.DB, userID string, unit *game.Unit) error {
 		return fmt.Errorf("unit is nil")
 	}
 	_, err := db.Exec(
-		`INSERT INTO unit_snapshots (user_id, hp, qi, attack, model, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-             hp = excluded.hp, qi = excluded.qi, attack = excluded.attack,
-             model = excluded.model, updated_at = excluded.updated_at`,
-		userID, unit.HP, unit.Qi, unit.Attack, unit.Model, time.Now().Unix(),
+		`INSERT INTO unit_snapshots (user_id, kind, hp, qi, attack, model, grid_x, grid_y, stack_level, updated_at)
+	         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	         ON CONFLICT(user_id) DO UPDATE SET
+	             kind = excluded.kind,
+	             hp = excluded.hp,
+	             qi = excluded.qi,
+	             attack = excluded.attack,
+	             model = excluded.model,
+	             grid_x = excluded.grid_x,
+	             grid_y = excluded.grid_y,
+	             stack_level = excluded.stack_level,
+	             updated_at = excluded.updated_at`,
+		userID, unit.Kind, unit.HP, unit.Qi, unit.Attack, unit.Model, unit.GridX, unit.GridY, unit.StackLevel, time.Now().Unix(),
 	)
 	return err
 }

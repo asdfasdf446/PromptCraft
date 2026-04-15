@@ -16,14 +16,14 @@ import {
   SceneLoader,
   AbstractMesh,
   Animation,
-  AnimationGroup
+  AnimationGroup,
+  Material,
 } from '@babylonjs/core';
 import '@babylonjs/loaders/glTF';
-import { worldState, UnitState } from '../network/WebSocketClient';
+import { worldState, UnitState, TileState } from '../network/WebSocketClient';
 import {
   wireframeMode,
   gridVisible,
-  perfMonitorVisible,
   setCurrentDayPhase,
   setCycleProgress,
   type DayPhase
@@ -33,126 +33,212 @@ interface Props {
   onUnitClick: (unit: UnitState) => void;
 }
 
+const tileBaseByKind: Record<TileState['kind'], string> = {
+  normal: 'ground_pathOpen.glb',
+  fertile: 'ground_grass.glb',
+  obstacle: 'water.json',
+};
+
+const stackHeight = 1.2;
+const moveAnimationFrames = 30;
+const moveAnimationFps = 60;
+const deathFadeMs = 700;
+
+type EntityRenderRecord = {
+  unitId: string;
+  root: AbstractMesh;
+  descendants: AbstractMesh[];
+  animationGroups: AnimationGroup[];
+  idleGroups: AnimationGroup[];
+  walkGroups: AnimationGroup[];
+  yOffset: number;
+  prevPosition: { gridX: number; gridY: number; stackLevel: number };
+  loadingToken: number;
+  dying: boolean;
+  deathStartedAt?: number;
+  fadeMaterials?: Material[];
+};
+
 export default function BabylonScene(props: Props) {
   let canvas: HTMLCanvasElement;
   let engine: Engine;
   let scene: Scene;
-  const unitMeshes = new Map<string, AbstractMesh>();
+  const unitRecords = new Map<string, EntityRenderRecord>();
+  const tileMeshes = new Map<string, AbstractMesh>();
   const playerArrow = { mesh: null as Mesh | null };
   const actionIcons = new Map<string, { plane: Mesh; startTime: number }>();
-  const unitPrevPositions = new Map<string, { x: number; y: number }>();
-  const unitAnimationGroups = new Map<string, AnimationGroup[]>();
-  const unitYOffsets = new Map<string, number>();
-  const unitFacingDirections = new Map<string, number>();
   const borderMeshes: Mesh[] = [];
+  const pendingLoads = new Map<string, number>();
   let sunLight: DirectionalLight;
 
+  const getTargetPosition = (gridX: number, gridY: number, stackLevel: number, yOffset: number) => (
+    new Vector3(gridX, yOffset + stackLevel * stackHeight, gridY)
+  );
+
+  const setMeshNameRecursive = (root: AbstractMesh, unitId: string) => {
+    root.name = `unit_${unitId}`;
+    for (const child of root.getChildMeshes()) {
+      child.name = `unit_${unitId}`;
+    }
+  };
+
+  const cloneMaterialsForFade = (record: EntityRenderRecord) => {
+    const uniqueMaterials = new Map<string, Material>();
+    for (const mesh of [record.root, ...record.descendants]) {
+      if (!mesh.material) continue;
+      const key = mesh.material.uniqueId.toString();
+      let cloned = uniqueMaterials.get(key);
+      if (!cloned) {
+        cloned = mesh.material.clone(`${mesh.material.name || 'unitMat'}_${record.unitId}_fade`);
+        if (!cloned) continue;
+        uniqueMaterials.set(key, cloned);
+      }
+      mesh.material = cloned;
+    }
+    record.fadeMaterials = [...uniqueMaterials.values()];
+  };
+
+  const stopAnimationGroups = (groups: AnimationGroup[]) => {
+    for (const group of groups) {
+      group.stop();
+      group.reset();
+    }
+  };
+
+  const applyIdlePose = (record: EntityRenderRecord) => {
+    stopAnimationGroups(record.walkGroups);
+    for (const group of record.idleGroups) {
+      group.start(false, 1.0, 0, group.to, false);
+      group.goToFrame(group.to);
+      group.pause();
+    }
+  };
+
+  const playWalkLoop = (record: EntityRenderRecord) => {
+    if (record.walkGroups.length === 0) return;
+    stopAnimationGroups(record.idleGroups);
+    for (const group of record.walkGroups) {
+      if (!group.isPlaying) {
+        group.start(true);
+      }
+    }
+  };
+
+  const classifyAnimationGroups = (groups: AnimationGroup[]) => {
+    const idleGroups: AnimationGroup[] = [];
+    const walkGroups: AnimationGroup[] = [];
+    for (const group of groups) {
+      const name = group.name.toLowerCase();
+      if (name.includes('walk') || name.includes('run') || name.includes('move')) {
+        walkGroups.push(group);
+      } else if (name.includes('idle') || name.includes('static')) {
+        idleGroups.push(group);
+      }
+    }
+    return { idleGroups, walkGroups };
+  };
+
+  const disposeUnitRecord = (unitId: string) => {
+    const record = unitRecords.get(unitId);
+    if (!record) return;
+    stopAnimationGroups(record.animationGroups);
+    record.root.dispose(false, true);
+    record.fadeMaterials?.forEach((material) => material.dispose());
+    unitRecords.delete(unitId);
+    pendingLoads.delete(unitId);
+  };
+
+  const startDeathFade = (unitId: string) => {
+    const record = unitRecords.get(unitId);
+    if (!record || record.dying) return;
+    record.dying = true;
+    record.deathStartedAt = Date.now();
+    stopAnimationGroups(record.animationGroups);
+    cloneMaterialsForFade(record);
+  };
+
+  const createFallbackUnit = (unit: UnitState, yOffset = 0.5) => {
+    const fallbackMesh = MeshBuilder.CreateBox(`unit_${unit.id}`, { size: 0.8 }, scene);
+    fallbackMesh.position = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, yOffset);
+    const mat = new StandardMaterial(`unitMat_${unit.id}`, scene);
+    mat.diffuseColor = unit.kind === 'food' ? new Color3(0.2, 0.8, 0.2) : new Color3(0.9, 0.7, 0.3);
+    fallbackMesh.material = mat;
+    return fallbackMesh;
+  };
+
+  const createUnitRecord = (unit: UnitState, root: AbstractMesh, animationGroups: AnimationGroup[] = []) => {
+    const descendants = root.getChildMeshes();
+    setMeshNameRecursive(root, unit.id);
+    root.scaling = unit.kind === 'food' ? new Vector3(0.8, 0.8, 0.8) : new Vector3(0.5, 0.5, 0.5);
+    root.computeWorldMatrix(true);
+    const { min } = root.getHierarchyBoundingVectors(true);
+    const yOffset = Math.max(0, -min.y);
+    root.position = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, yOffset);
+    const { idleGroups, walkGroups } = classifyAnimationGroups(animationGroups);
+    const record: EntityRenderRecord = {
+      unitId: unit.id,
+      root,
+      descendants,
+      animationGroups,
+      idleGroups,
+      walkGroups,
+      yOffset,
+      prevPosition: { gridX: unit.grid_x, gridY: unit.grid_y, stackLevel: unit.stack_level },
+      loadingToken: pendingLoads.get(unit.id) ?? 0,
+      dying: false,
+    };
+    unitRecords.set(unit.id, record);
+    if (animationGroups.length > 0) {
+      applyIdlePose(record);
+    }
+    return record;
+  };
+
+  const resolveModelLocation = (unit: UnitState) => {
+    if (unit.kind === 'food') {
+      const modelFile = unit.model.replace(/^nature\//, '');
+      return { assetFolder: '/assets/models/nature/', assetFile: modelFile };
+    }
+    const modelPath = unit.model.split('/');
+    const modelFile = modelPath.pop() || unit.model;
+    const folder = modelPath.length > 0 ? `/assets/models/${modelPath.join('/')}/` : '/assets/models/';
+    return { assetFolder: folder, assetFile: modelFile };
+  };
+
   onMount(() => {
-    // Initialize engine and scene
     engine = new Engine(canvas, true, { adaptToDeviceRatio: true });
     scene = new Scene(engine);
     scene.clearColor = new Color3(0.1, 0.1, 0.1).toColor4();
 
-    // Camera (top-down view)
-    const camera = new ArcRotateCamera(
-      'camera',
-      -Math.PI / 2,
-      Math.PI / 4,
-      50,
-      new Vector3(15, 0, 15),
-      scene
-    );
+    const camera = new ArcRotateCamera('camera', -Math.PI / 2, Math.PI / 4, 50, new Vector3(15, 0, 15), scene);
     camera.attachControl(canvas, true);
     camera.lowerRadiusLimit = 20;
     camera.upperRadiusLimit = 80;
     camera.lowerBetaLimit = 0.1;
     camera.upperBetaLimit = Math.PI / 2.5;
 
-    // Light
     const light = new HemisphericLight('light', new Vector3(0, 1, 0), scene);
     light.intensity = 0.8;
 
-    // Directional light (sunlight) for day/night cycle
     sunLight = new DirectionalLight('sunLight', new Vector3(1, -1, 0.5), scene);
     sunLight.intensity = 0.7;
     sunLight.diffuse = new Color3(1, 0.9, 0.7);
 
-    // Double-layer terrain: base ground + optional surface object
-    const baseModels = [
-      { model: "ground_grass.glb", weight: 85 },
-      { model: "ground_pathOpen.glb", weight: 15 },
-    ];
-    const surfaceModels: { model: string | null; weight: number }[] = [
-      { model: null, weight: 70 },
-      { model: "rock_smallA.glb", weight: 5 },
-      { model: "rock_smallB.glb", weight: 5 },
-      { model: "plant_bushSmall.glb", weight: 8 },
-      { model: "grass.glb", weight: 5 },
-      { model: "flower_yellowA.glb", weight: 3 },
-      { model: "flower_redA.glb", weight: 2 },
-      { model: "flower_purpleA.glb", weight: 2 },
-    ];
-
-    const selectModel = (models: { model: string | null; weight: number }[], seed: number): string | null => {
-      const random = (Math.abs(Math.sin(seed)) * 10000) % 100;
-      let cumulative = 0;
-      for (const item of models) {
-        cumulative += item.weight;
-        if (random < cumulative) return item.model;
-      }
-      return models[0].model;
-    };
-
-    // Create border material (shared for all borders)
-    const borderMat = new StandardMaterial("borderMat", scene);
+    const borderMat = new StandardMaterial('borderMat', scene);
     borderMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
     borderMat.specularColor = new Color3(0, 0, 0);
 
-    // Create grid floor with double-layer tiles and borders
     for (let x = 0; x < 30; x++) {
       for (let z = 0; z < 30; z++) {
-        // Base layer: always a ground tile
-        const baseModel = selectModel(baseModels, x * 31 + z * 17) as string;
-        SceneLoader.ImportMesh("", "/assets/models/nature/", baseModel, scene,
-          (meshes) => {
-            if (meshes.length > 0) {
-              const tile = meshes[0];
-              tile.name = `tile_${x}_${z}`;
-              tile.position = new Vector3(x, 0, z);
-              tile.scaling = new Vector3(1, 1, 1);
-            }
-          }
-        );
-
-        // Surface layer: optional object on top (~30% of tiles)
-        const surfaceModel = selectModel(surfaceModels, x * 53 + z * 37);
-        if (surfaceModel) {
-          SceneLoader.ImportMesh("", "/assets/models/nature/", surfaceModel, scene,
-            (meshes) => {
-              if (meshes.length > 0) {
-                const surface = meshes[0];
-                surface.name = `surface_${x}_${z}`;
-                surface.position = new Vector3(x, 0, z);
-                surface.scaling = new Vector3(1, 1, 1);
-              }
-            }
-          );
-        }
-
-        // Add vertical border (right edge of cell)
         if (x < 29) {
-          const vBorder = MeshBuilder.CreatePlane(`vborder_${x}_${z}`,
-            { width: 0.05, height: 1 }, scene);
+          const vBorder = MeshBuilder.CreatePlane(`vborder_${x}_${z}`, { width: 0.05, height: 1 }, scene);
           vBorder.position = new Vector3(x + 0.5, 0.01, z);
           vBorder.rotation.x = Math.PI / 2;
           vBorder.material = borderMat;
           borderMeshes.push(vBorder);
         }
-
-        // Add horizontal border (bottom edge of cell)
         if (z < 29) {
-          const hBorder = MeshBuilder.CreatePlane(`hborder_${x}_${z}`,
-            { width: 1, height: 0.05 }, scene);
+          const hBorder = MeshBuilder.CreatePlane(`hborder_${x}_${z}`, { width: 1, height: 0.05 }, scene);
           hBorder.position = new Vector3(x, 0.01, z + 0.5);
           hBorder.rotation.x = Math.PI / 2;
           hBorder.material = borderMat;
@@ -161,7 +247,6 @@ export default function BabylonScene(props: Props) {
       }
     }
 
-    // Create compass markers outside the grid
     const createDirectionMarker = (text: string, position: Vector3, color: Color3) => {
       const marker = MeshBuilder.CreateBox(`marker_${text}`, { width: 2, height: 0.5, depth: 2 }, scene);
       marker.position = position;
@@ -170,7 +255,6 @@ export default function BabylonScene(props: Props) {
       mat.emissiveColor = color.scale(0.3);
       marker.material = mat;
 
-      // Add text label with larger texture
       const plane = MeshBuilder.CreatePlane(`label_${text}`, { width: 5, height: 2 }, scene);
       plane.position = new Vector3(position.x, position.y + 1.5, position.z);
       plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
@@ -191,16 +275,11 @@ export default function BabylonScene(props: Props) {
       texture.update();
     };
 
-    // North (negative Z) - Blue
     createDirectionMarker('North (Up)', new Vector3(15, 0.3, -3), new Color3(0.3, 0.5, 1));
-    // South (positive Z) - Red
     createDirectionMarker('South (Down)', new Vector3(15, 0.3, 33), new Color3(1, 0.3, 0.3));
-    // West (negative X) - Green
     createDirectionMarker('West (Left)', new Vector3(-3, 0.3, 15), new Color3(0.3, 1, 0.5));
-    // East (positive X) - Yellow
     createDirectionMarker('East (Right)', new Vector3(33, 0.3, 15), new Color3(1, 1, 0.3));
 
-    // Pointer events for unit clicking
     scene.onPointerObservable.add((pointerInfo) => {
       if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
         const pickResult = scene.pick(scene.pointerX, scene.pointerY);
@@ -209,44 +288,48 @@ export default function BabylonScene(props: Props) {
           if (meshName.startsWith('unit_')) {
             const unitId = meshName.replace('unit_', '');
             const unit = worldState()?.units.find(u => u.id === unitId);
-            if (unit) {
-              props.onUnitClick(unit);
-            }
+            if (unit) props.onUnitClick(unit);
           }
         }
       }
     });
 
-    // Per-frame smooth arrow bobbing
     scene.registerBeforeRender(() => {
       if (playerArrow.mesh) {
         playerArrow.mesh.position.y = 2.5 + Math.sin(Date.now() / 1000 * 2) * 0.2;
       }
+
+      const now = Date.now();
+      for (const [unitId, record] of unitRecords.entries()) {
+        if (!record.dying || record.deathStartedAt == null || !record.fadeMaterials) continue;
+        const elapsed = now - record.deathStartedAt;
+        const alpha = Math.max(0, 1 - (elapsed / deathFadeMs));
+        for (const material of record.fadeMaterials) {
+          if ('alpha' in material) {
+            (material as StandardMaterial | PBRMaterial).alpha = alpha;
+          }
+        }
+        if (elapsed >= deathFadeMs) {
+          disposeUnitRecord(unitId);
+        }
+      }
     });
 
-    // Render loop
     engine.runRenderLoop(() => {
       scene.render();
-
-      // Day/Night Cycle (3 minutes per cycle)
-      const cycleTime = 180; // seconds
+      const cycleTime = 180;
       const time = Date.now() / 1000;
-      const phase = (time % cycleTime) / cycleTime; // 0 to 1
+      const phase = (time % cycleTime) / cycleTime;
       setCycleProgress(phase);
-
-      // Sun position: rotate around the scene
-      const sunAngle = phase * Math.PI * 2 - Math.PI / 2; // Start at sunrise
+      const sunAngle = phase * Math.PI * 2 - Math.PI / 2;
       const sunHeight = Math.sin(sunAngle);
       const sunHorizontal = Math.cos(sunAngle);
       sunLight.direction = new Vector3(sunHorizontal, -Math.abs(sunHeight) - 0.3, 0.5).normalize();
 
-      // Keyframe values for smooth continuous interpolation
-      // cycle: midnight(0) -> morning(0.25) -> afternoon(0.5) -> evening(0.75) -> midnight(1)
       const kfMidnight  = { i: 0.15, dr: 0.2, dg: 0.2,  db: 0.4,  sr: 0.05, sg: 0.05, sb: 0.15 };
       const kfMorning   = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.5,  sg: 0.7,  sb: 1.0  };
       const kfAfternoon = { i: 0.8,  dr: 1.0, dg: 0.95, db: 0.9,  sr: 0.4,  sg: 0.6,  sb: 1.0  };
       const kfEvening   = { i: 0.2,  dr: 1.0, dg: 0.2,  db: 0.05, sr: 0.1,  sg: 0.05, sb: 0.05 };
-
       type Kf = typeof kfMidnight;
       const lerpKf = (a: Kf, b: Kf, t: number): Kf => ({
         i:  a.i  + (b.i  - a.i)  * t,
@@ -279,35 +362,25 @@ export default function BabylonScene(props: Props) {
       scene.clearColor = new Color3(kf.sr, kf.sg, kf.sb).toColor4();
       setCurrentDayPhase(currentPhase);
 
-      // Update FPS for debug bar
       if ((window as any).__setDebugFps) {
         (window as any).__setDebugFps(Math.round(engine.getFps()));
       }
 
-      // Update action icons (fade out after 3 seconds)
       const now = Date.now();
       for (const [id, icon] of actionIcons.entries()) {
         const elapsed = (now - icon.startTime) / 1000;
         if (elapsed >= 3) {
           icon.plane.dispose();
           actionIcons.delete(id);
-        } else {
-          // Fade out
-          const alpha = 1 - (elapsed / 3);
-          if (icon.plane.material) {
-            (icon.plane.material as StandardMaterial).alpha = alpha;
-          }
+        } else if (icon.plane.material) {
+          (icon.plane.material as StandardMaterial).alpha = 1 - (elapsed / 3);
         }
       }
     });
 
-    // Handle resize
-    window.addEventListener('resize', () => {
-      engine.resize();
-    });
+    window.addEventListener('resize', () => engine.resize());
   });
 
-  // Debug: Wireframe Mode — applies to both StandardMaterial and PBRMaterial (used by GLB models)
   createEffect(() => {
     if (!scene) return;
     const enabled = wireframeMode();
@@ -316,265 +389,180 @@ export default function BabylonScene(props: Props) {
         mat.wireframe = enabled;
       }
     });
+    for (const record of unitRecords.values()) {
+      const unit = worldState()?.units.find(u => u.id === record.unitId);
+      if (unit?.kind === 'obstacle') {
+        record.root.isVisible = enabled;
+      }
+    }
   });
 
-  // Debug: Grid Visibility
   createEffect(() => {
     const visible = gridVisible();
-    borderMeshes.forEach(mesh => {
-      mesh.isVisible = visible;
-    });
+    borderMeshes.forEach(mesh => { mesh.isVisible = visible; });
   });
 
   createEffect(() => {
     const state = worldState();
-    if (!state || !scene) return;
+    if (!state || !scene || !Array.isArray(state.tiles) || !Array.isArray(state.units)) return;
+
+    const tileKeys = new Set(state.tiles.map(tile => `${tile.grid_x}_${tile.grid_y}`));
+    for (const [key, mesh] of tileMeshes.entries()) {
+      if (!tileKeys.has(key)) {
+        mesh.dispose();
+        tileMeshes.delete(key);
+      }
+    }
+
+    for (const tile of state.tiles) {
+      const key = `${tile.grid_x}_${tile.grid_y}`;
+      if (tileMeshes.has(key)) continue;
+
+      const model = tileBaseByKind[tile.kind];
+      if (model.endsWith('.glb')) {
+        SceneLoader.ImportMesh('', '/assets/models/nature/', model, scene, (meshes) => {
+          if (meshes.length > 0) {
+            const root = meshes[0];
+            root.name = `tile_${key}`;
+            root.position = new Vector3(tile.grid_x, 0, tile.grid_y);
+            tileMeshes.set(key, root);
+          }
+        });
+      } else {
+        const tileMesh = MeshBuilder.CreateGround(`tile_${key}`, { width: 1, height: 1 }, scene);
+        tileMesh.position = new Vector3(tile.grid_x, 0, tile.grid_y);
+        const mat = new StandardMaterial(`tilemat_${key}`, scene);
+        mat.diffuseColor = tile.kind === 'obstacle' ? new Color3(0.1, 0.3, 0.8) : tile.kind === 'fertile' ? new Color3(0.2, 0.6, 0.2) : new Color3(0.45, 0.3, 0.15);
+        tileMesh.material = mat;
+        tileMeshes.set(key, tileMesh);
+      }
+    }
+
+    const currentUnitIds = new Set(state.units.map(u => u.id));
+    for (const unitId of state.deaths?.map((death) => death.unit_id) ?? []) {
+      startDeathFade(unitId);
+    }
+    for (const [id, record] of unitRecords.entries()) {
+      if (!currentUnitIds.has(id) && !record.dying) {
+        disposeUnitRecord(id);
+      }
+    }
+
+    for (const unit of state.units) {
+      let record = unitRecords.get(unit.id);
+      const targetPosition = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, record?.yOffset ?? 0.5);
+      if (!record) {
+        if (unit.kind === 'obstacle') {
+          const obstacleMesh = MeshBuilder.CreateBox(`unit_${unit.id}`, { size: 0.9 }, scene);
+          obstacleMesh.position = targetPosition;
+          const mat = new StandardMaterial(`unitMat_${unit.id}`, scene);
+          mat.diffuseColor = new Color3(0.6, 0.6, 0.6);
+          mat.wireframe = true;
+          obstacleMesh.material = mat;
+          obstacleMesh.isVisible = wireframeMode();
+          record = createUnitRecord(unit, obstacleMesh);
+          record.yOffset = 0.5;
+          record.root.position = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, record.yOffset);
+          continue;
+        }
+
+        const token = (pendingLoads.get(unit.id) ?? 0) + 1;
+        pendingLoads.set(unit.id, token);
+        const { assetFolder, assetFile } = resolveModelLocation(unit);
+        SceneLoader.ImportMesh('', assetFolder, assetFile, scene, (meshes, _particleSystems, _skeletons, animationGroups) => {
+          if ((pendingLoads.get(unit.id) ?? 0) !== token || unitRecords.has(unit.id)) {
+            meshes.forEach((mesh) => mesh.dispose(false, true));
+            animationGroups?.forEach((group) => group.dispose());
+            return;
+          }
+          if (meshes.length === 0) return;
+          createUnitRecord(unit, meshes[0], animationGroups ?? []);
+        }, undefined, () => {
+          if ((pendingLoads.get(unit.id) ?? 0) !== token || unitRecords.has(unit.id)) {
+            return;
+          }
+          console.warn(`[BabylonScene] Failed to load model for ${unit.id}: ${assetFolder}${assetFile}`);
+          createUnitRecord(unit, createFallbackUnit(unit));
+        });
+        continue;
+      }
+
+      if (record.dying) {
+        continue;
+      }
+
+      record.root.isVisible = unit.kind !== 'obstacle' || wireframeMode();
+      const startPos = getTargetPosition(record.prevPosition.gridX, record.prevPosition.gridY, record.prevPosition.stackLevel, record.yOffset);
+      const endPos = getTargetPosition(unit.grid_x, unit.grid_y, unit.stack_level, record.yOffset);
+      if (!startPos.equals(endPos)) {
+        playWalkLoop(record);
+        const posAnim = new Animation(`moveAnim_${unit.id}`, 'position', moveAnimationFps, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
+        posAnim.setKeys([{ frame: 0, value: startPos }, { frame: moveAnimationFrames, value: endPos }]);
+        record.root.animations = [posAnim];
+        const animatable = scene.beginAnimation(record.root, 0, moveAnimationFrames, false, 1.0);
+        animatable.onAnimationEnd = () => {
+          const latest = unitRecords.get(unit.id);
+          if (latest && !latest.dying) {
+            latest.root.position = endPos.clone();
+            applyIdlePose(latest);
+          }
+        };
+      } else if (record.animationGroups.length > 0) {
+        applyIdlePose(record);
+      }
+      record.prevPosition = { gridX: unit.grid_x, gridY: unit.grid_y, stackLevel: unit.stack_level };
+    }
 
     const myUnitId = sessionStorage.getItem('myUnitId');
-    console.log('[BabylonScene] 🎯 My unit ID (tab-local):', myUnitId);
-
-    // Update units
-    const currentUnitIds = new Set(state.units.map(u => u.id));
-
-    // Remove dead units
-    for (const [id, mesh] of unitMeshes.entries()) {
-      if (!currentUnitIds.has(id)) {
-        mesh.dispose();
-        unitMeshes.delete(id);
-      }
-    }
-
-    // Add/update units
-    for (const unit of state.units) {
-      let mesh = unitMeshes.get(unit.id);
-
-      if (!mesh) {
-        // Load 3D model for new unit
-        const modelPath = unit.model.split('/');
-        const modelFile = modelPath.pop() || unit.model;
-        const basePath = `/assets/models/${modelPath.join('/')}/`;
-
-        SceneLoader.ImportMesh("", basePath, modelFile, scene,
-          (meshes, particleSystems, skeletons, animationGroups) => {
-            if (meshes.length > 0) {
-              const rootMesh = meshes[0];
-              rootMesh.name = `unit_${unit.id}`;
-              rootMesh.scaling = new Vector3(0.5, 0.5, 0.5);
-
-              // Compute bounding box to ground the model correctly
-              rootMesh.computeWorldMatrix(true);
-              const { min } = rootMesh.getHierarchyBoundingVectors(true);
-              const yOffset = Math.max(0, -min.y);
-              unitYOffsets.set(unit.id, yOffset);
-              rootMesh.position = new Vector3(unit.x, yOffset, unit.y);
-
-              unitMeshes.set(unit.id, rootMesh);
-
-              // Apply wireframe to newly loaded PBR materials if mode is active
-              if (wireframeMode()) {
-                scene.materials.forEach((mat) => {
-                  if (mat instanceof PBRMaterial) mat.wireframe = true;
-                });
-              }
-
-              // Store animation groups for this unit
-              if (animationGroups && animationGroups.length > 0) {
-                unitAnimationGroups.set(unit.id, animationGroups);
-                console.log(`Unit ${unit.id} loaded with ${animationGroups.length} animations:`,
-                  animationGroups.map(ag => ag.name));
-              }
-
-              // Initialize previous position
-              unitPrevPositions.set(unit.id, { x: unit.x, y: unit.y });
-            }
-          },
-          undefined,
-          (scene, message, exception) => {
-            // Fallback to colored box if model fails to load
-            console.warn(`Failed to load model ${unit.model}, using fallback box:`, message);
-            const fallbackMesh = MeshBuilder.CreateBox(`unit_${unit.id}`, { size: 0.8 }, scene);
-            fallbackMesh.position = new Vector3(unit.x, 0.5, unit.y);
-
-            const mat = new StandardMaterial(`unitMat_${unit.id}`, scene);
-            const hue = parseInt(unit.id.slice(0, 8), 16) % 360;
-            const color = Color3.FromHSV(hue, 0.7, 0.9);
-            mat.diffuseColor = color;
-            mat.specularColor = new Color3(0.2, 0.2, 0.2);
-            fallbackMesh.material = mat;
-
-            unitMeshes.set(unit.id, fallbackMesh);
-          }
-        );
-      } else {
-        // Update position for existing mesh with smooth movement
-        const prevPos = unitPrevPositions.get(unit.id);
-
-        if (prevPos && (prevPos.x !== unit.x || prevPos.y !== unit.y)) {
-          // Position changed - animate movement
-          const yOffset = unitYOffsets.get(unit.id) ?? 0.5;
-          const startPos = new Vector3(prevPos.x, yOffset, prevPos.y);
-          const endPos = new Vector3(unit.x, yOffset, unit.y);
-
-          // Calculate target rotation from movement direction
-          const dx = unit.x - prevPos.x;
-          const dy = unit.y - prevPos.y;
-          let targetRotation = 0;
-          if (dx > 0) targetRotation = Math.PI / 2;
-          else if (dx < 0) targetRotation = -Math.PI / 2;
-          else if (dy > 0) targetRotation = Math.PI;
-          else if (dy < 0) targetRotation = 0;
-
-          // Compute shortest-path delta from tracked facing direction
-          const currentFacing = unitFacingDirections.get(unit.id) ?? 0;
-          let delta = targetRotation - currentFacing;
-          while (delta > Math.PI) delta -= 2 * Math.PI;
-          while (delta < -Math.PI) delta += 2 * Math.PI;
-          // For 180° turns, randomly choose left or right
-          if (Math.abs(Math.abs(delta) - Math.PI) < 0.01) {
-            delta = Math.random() < 0.5 ? Math.PI : -Math.PI;
-          }
-
-          // Split total 2s proportionally: rotFrames + moveFrames = 120
-          const rotFrames = Math.round((Math.abs(delta) / Math.PI) * 60);
-          const moveFrames = 120 - rotFrames;
-          const endRotation = currentFacing + delta;
-
-          const startMove = () => {
-            const posAnim = new Animation('moveAnim', 'position', 60,
-              Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-            posAnim.setKeys([
-              { frame: 0, value: startPos },
-              { frame: moveFrames, value: endPos }
-            ]);
-            mesh.animations = [posAnim];
-            scene.beginAnimation(mesh, 0, moveFrames, false, 1.0);
-
-            const animGroups = unitAnimationGroups.get(unit.id);
-            if (animGroups) {
-              const walkAnim = animGroups.find(ag =>
-                ag.name.toLowerCase().includes('walk') ||
-                ag.name.toLowerCase().includes('run') ||
-                ag.name.toLowerCase().includes('move')
-              );
-              if (walkAnim) {
-                walkAnim.start(true, 1.0, walkAnim.from, walkAnim.to, false);
-                setTimeout(() => walkAnim.stop(), (moveFrames / 60) * 1000);
-              }
-            }
-          };
-
-          if (rotFrames > 0) {
-            const rotAnim = new Animation('rotAnim', 'rotation.y', 60,
-              Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
-            rotAnim.setKeys([
-              { frame: 0, value: currentFacing },
-              { frame: rotFrames, value: endRotation }
-            ]);
-            mesh.animations = [rotAnim];
-            const rotAnimatable = scene.beginAnimation(mesh, 0, rotFrames, false, 1.0);
-            rotAnimatable.onAnimationEndObservable.addOnce(() => {
-              unitFacingDirections.set(unit.id, targetRotation);
-              startMove();
-            });
-          } else {
-            startMove();
-          }
-        }
-
-        // Update previous position
-        unitPrevPositions.set(unit.id, { x: unit.x, y: unit.y });
-      }
-    }
-
-    // Update player arrow indicator
     if (myUnitId) {
-      const myUnit = state.units.find(u => u.id === myUnitId);
-
+      const myUnit = state.units.find(u => u.id === myUnitId && u.kind === 'player');
       if (myUnit) {
         if (!playerArrow.mesh) {
-          // Create cone pointing downward (tip at bottom)
-          playerArrow.mesh = MeshBuilder.CreateCylinder('playerArrow', {
-            diameterTop: 0.4,
-            diameterBottom: 0,
-            height: 0.6,
-            tessellation: 8
-          }, scene);
-
+          playerArrow.mesh = MeshBuilder.CreateCylinder('playerArrow', { diameterTop: 0.4, diameterBottom: 0, height: 0.6, tessellation: 8 }, scene);
           const arrowMat = new StandardMaterial('playerArrowMat', scene);
-          arrowMat.diffuseColor = new Color3(1, 1, 0); // Yellow
+          arrowMat.diffuseColor = new Color3(1, 1, 0);
           arrowMat.emissiveColor = new Color3(1, 1, 0).scale(0.5);
           playerArrow.mesh.material = arrowMat;
-          // Set initial X/Z; Y is driven by registerBeforeRender
-          playerArrow.mesh.position.x = myUnit.x;
-          playerArrow.mesh.position.z = myUnit.y;
         }
-
-        // Only update X/Z — Y is handled per-frame by registerBeforeRender for smooth bobbing
-        playerArrow.mesh.position.x = myUnit.x;
-        playerArrow.mesh.position.z = myUnit.y;
+        const playerRecord = unitRecords.get(myUnit.id);
+        const playerYOffset = playerRecord?.yOffset ?? 0.5;
+        playerArrow.mesh.position.x = myUnit.grid_x;
+        playerArrow.mesh.position.y = playerYOffset + myUnit.stack_level * stackHeight + 2;
+        playerArrow.mesh.position.z = myUnit.grid_y;
       } else if (playerArrow.mesh) {
-        // Remove arrow if player unit doesn't exist
         playerArrow.mesh.dispose();
         playerArrow.mesh = null;
       }
     }
 
-    // Handle action events
     if (state.actions && state.actions.length > 0) {
       for (const action of state.actions) {
         const iconId = `${action.unit_id}_${Date.now()}`;
-
-        // Create floating icon
         const plane = MeshBuilder.CreatePlane(iconId, { width: 1, height: 1 }, scene);
-        plane.position = new Vector3(action.x, 1.5, action.y);
+        plane.position = new Vector3(action.target_x, 1.5 + action.target_stack_level * stackHeight, action.target_y);
         plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
-
         const texture = new DynamicTexture(`iconTexture_${iconId}`, { width: 256, height: 256 }, scene);
         const mat = new StandardMaterial(`iconMat_${iconId}`, scene);
         mat.diffuseTexture = texture;
         mat.emissiveColor = new Color3(1, 1, 1);
         mat.useAlphaFromDiffuseTexture = true;
         plane.material = mat;
-
         const ctx = texture.getContext();
-        // Clear canvas
         ctx.clearRect(0, 0, 256, 256);
-
-        // Draw background circle
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
         ctx.beginPath();
         ctx.arc(128, 128, 100, 0, Math.PI * 2);
         ctx.fill();
-
-        // Draw border
         ctx.strokeStyle = '#333';
         ctx.lineWidth = 8;
         ctx.stroke();
-
-        // Draw emoji
         ctx.font = 'bold 120px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#333';
         ctx.fillText('💬', 128, 128);
         texture.update();
-
         actionIcons.set(iconId, { plane, startTime: Date.now() });
-
-        // Trigger attack animation if available
-        const animGroups = unitAnimationGroups.get(action.unit_id);
-        if (animGroups) {
-          const attackAnim = animGroups.find(ag =>
-            ag.name.toLowerCase().includes('attack') ||
-            ag.name.toLowerCase().includes('hit') ||
-            ag.name.toLowerCase().includes('strike')
-          );
-          if (attackAnim) {
-            attackAnim.start(false, 1.0, attackAnim.from, attackAnim.to);
-          } else {
-            console.warn(`Unit ${action.unit_id}: No attack animation found`);
-          }
-        }
       }
     }
   });
@@ -586,12 +574,7 @@ export default function BabylonScene(props: Props) {
   return (
     <canvas
       ref={canvas!}
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'block',
-        outline: 'none'
-      }}
+      style={{ width: '100%', height: '100%', display: 'block', outline: 'none' }}
     />
   );
 }

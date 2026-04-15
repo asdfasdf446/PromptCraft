@@ -6,7 +6,7 @@ A text-controlled multiplayer survival and combat game with 3D graphics, played 
 
 ## Overview
 
-PromptCraft is a functional multiplayer web game set on a 30×30 grid world rendered in 3D. Every action — moving, attacking — is issued as a text command. A resource called **qi (气)** gates how many actions you can queue. The world ticks every 5 seconds, executing all queued commands in priority order.
+PromptCraft is a functional multiplayer web game set on a 30×30 grid world rendered in 3D. Every action — moving, attacking — is issued as a text command. A resource called **qi (气)** gates how many actions you can queue. The world ticks every 5 seconds, executing all queued commands in priority order. The simulation now includes tile kinds and two-layer stacked occupancy, so players, food, and obstacle entities can share the same world state.
 
 The game is designed to be scriptable: all commands are exposed via WebSocket API, so players can write programs to automate their units.
 
@@ -18,7 +18,10 @@ The game is designed to be scriptable: all commands are exposed via WebSocket AP
 
 - **3D Graphics**: Low-poly 3D models rendered with Babylon.js (WebGL2)
 - **15 Animal Characters**: Bunny, cat, dog, elephant, fish, giraffe, lion, monkey, pig, tiger, and more
-- **Procedural Terrain**: Varied terrain with grass, paths, rocks, bushes, and flowers
+- **Procedural Terrain**: Server-defined normal, fertile, and obstacle tiles rendered in the client with a 2:1:7 fertile:obstacle:normal ratio
+- **Stacked World State**: Up to two entities can occupy a tile with gravity and carrying rules
+- **Hidden Obstacle Walls**: Obstacle entities block gameplay but are only visible in wireframe mode
+- **Growing Food**: Fertile tiles begin with 0 or 1 food layer and regrow toward two layers over time using nature models
 - **Multiplayer**: Real-time synchronization via WebSocket (up to 10 players)
 - **Command Queue System**: Queue multiple actions, edit before execution
 - **Qi Resource System**: 10 qi max, regenerates 1 per 10 seconds
@@ -55,7 +58,7 @@ cd backend
 go run main.go
 ```
 
-Backend starts on `http://localhost:8080`
+Backend starts on `http://localhost:8081`
 
 ### Running the Frontend
 

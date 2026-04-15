@@ -64,28 +64,51 @@ type CommandResult struct {
 	Tick        int64  `json:"tick"`
 }
 
+type TileState struct {
+	GridX int    `json:"grid_x"`
+	GridY int    `json:"grid_y"`
+	Kind  string `json:"kind"`
+}
+
 type UnitState struct {
 	ID          string   `json:"id"`
-	X           int      `json:"x"`
-	Y           int      `json:"y"`
+	Kind        string   `json:"kind"`
+	GridX       int      `json:"grid_x"`
+	GridY       int      `json:"grid_y"`
+	StackLevel  int      `json:"stack_level"`
 	HP          int      `json:"hp"`
-	Qi          int      `json:"qi"`
+	Qi          int      `json:"qi,omitempty"`
 	Name        string   `json:"name"`
 	Model       string   `json:"model"`
 	ActionQueue []string `json:"action_queue"`
 }
 
 type ActionEvent struct {
-	UnitID string `json:"unit_id"`
-	Action string `json:"action"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
+	UnitID           string `json:"unit_id"`
+	Action           string `json:"action"`
+	X                int    `json:"x"`
+	Y                int    `json:"y"`
+	StackLevel       int    `json:"stack_level"`
+	TargetX          int    `json:"target_x"`
+	TargetY          int    `json:"target_y"`
+	TargetStackLevel int    `json:"target_stack_level"`
+}
+
+type DeathEvent struct {
+	UnitID     string `json:"unit_id"`
+	Kind       string `json:"kind"`
+	GridX      int    `json:"grid_x"`
+	GridY      int    `json:"grid_y"`
+	StackLevel int    `json:"stack_level"`
+	Model      string `json:"model"`
 }
 
 type ServerWorldState struct {
+	Tiles   []TileState   `json:"tiles"`
 	Units   []UnitState   `json:"units"`
 	Tick    int64         `json:"tick"`
 	Actions []ActionEvent `json:"actions,omitempty"`
+	Deaths  []DeathEvent  `json:"deaths,omitempty"`
 }
 
 func writeCommandResult(conn *websocket.Conn, result CommandResult) {
@@ -179,7 +202,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Redis sync failed for unit %s: %v\n", unit.ID, err)
 	}
 
-	log.Printf("Player %s (%s) spawned at (%d, %d)\n", playerName, claims.Role, unit.X, unit.Y)
+	log.Printf("Player %s (%s) spawned at (%d, %d, %d)\n", playerName, claims.Role, unit.GridX, unit.GridY, unit.StackLevel)
 
 	// Notify client of their unit ID
 	conn.WriteJSON(map[string]string{"type": "auth_ok", "unit_id": unitID})
@@ -270,31 +293,58 @@ func broadcastWorldState() {
 	defer mu.Unlock()
 
 	state := ServerWorldState{
+		Tiles: []TileState{},
 		Units: []UnitState{},
 		Tick:  world.Tick,
+	}
+
+	for x := 0; x < game.GridSize; x++ {
+		for y := 0; y < game.GridSize; y++ {
+			state.Tiles = append(state.Tiles, TileState{GridX: x, GridY: y, Kind: string(world.Tiles[x][y].Kind)})
+		}
 	}
 
 	// Add actions from last tick
 	for _, action := range world.LastActions {
 		state.Actions = append(state.Actions, ActionEvent{
-			UnitID: action.UnitID,
-			Action: action.Action,
-			X:      action.X,
-			Y:      action.Y,
+			UnitID:           action.UnitID,
+			Action:           action.Action,
+			X:                action.X,
+			Y:                action.Y,
+			StackLevel:       action.StackLevel,
+			TargetX:          action.TargetX,
+			TargetY:          action.TargetY,
+			TargetStackLevel: action.TargetStackLevel,
+		})
+	}
+
+	for _, death := range world.LastDeaths {
+		state.Deaths = append(state.Deaths, DeathEvent{
+			UnitID:     death.UnitID,
+			Kind:       string(death.Kind),
+			GridX:      death.GridX,
+			GridY:      death.GridY,
+			StackLevel: death.StackLevel,
+			Model:      death.Model,
 		})
 	}
 
 	for _, unit := range world.Units {
-		state.Units = append(state.Units, UnitState{
+		unitState := UnitState{
 			ID:          unit.ID,
-			X:           unit.X,
-			Y:           unit.Y,
+			Kind:        string(unit.Kind),
+			GridX:       unit.GridX,
+			GridY:       unit.GridY,
+			StackLevel:  unit.StackLevel,
 			HP:          unit.HP,
-			Qi:          unit.Qi,
 			Name:        unit.Name,
 			Model:       unit.Model,
 			ActionQueue: unit.ActionQueue,
-		})
+		}
+		if unit.Kind == game.UnitKindPlayer {
+			unitState.Qi = unit.Qi
+		}
+		state.Units = append(state.Units, unitState)
 	}
 
 	data, _ := json.Marshal(state)
@@ -369,6 +419,11 @@ func main() {
 	// WebSocket endpoint
 	http.HandleFunc("/ws", handleWebSocket)
 
-	log.Println("Server starting on 0.0.0.0:8080")
-	log.Fatal(http.ListenAndServe("0.0.0.0:8080", nil))
+	serverAddr := os.Getenv("SERVER_ADDR")
+	if serverAddr == "" {
+		serverAddr = "0.0.0.0:8081"
+	}
+
+	log.Printf("Server starting on %s", serverAddr)
+	log.Fatal(http.ListenAndServe(serverAddr, nil))
 }

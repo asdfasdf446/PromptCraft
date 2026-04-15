@@ -1,6 +1,6 @@
 // Authentication utilities for guest and user login
 
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:8080`;
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:8081`;
 
 export interface AuthResponse {
   token: string;

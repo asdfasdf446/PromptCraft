@@ -6,14 +6,20 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
-	GridSize   = 30
-	MaxPlayers = 10
+	GridSize             = 30
+	MaxPlayers           = 10
+	MaxStackLevels       = 2
+	ObstacleHP           = 1000
+	FoodGrowthInterval   = 100
+	PlayerStackYOffset   = 1
 )
 
-var availableModels = []string{
+var availableModels = []string {
 	"animals/animal-bunny.glb",
 	"animals/animal-caterpillar.glb",
 	"animals/animal-cat.glb",
@@ -31,6 +37,15 @@ var availableModels = []string{
 	"animals/animal-tiger.glb",
 }
 
+var foodModels = []string{
+	"nature/crops_leafsStageA.glb",
+	"nature/crops_leafsStageB.glb",
+	"nature/crops_cornStageA.glb",
+	"nature/crops_cornStageB.glb",
+	"nature/crops_wheatStageA.glb",
+	"nature/crops_wheatStageB.glb",
+}
+
 type EnqueueCommandResultCode string
 
 const (
@@ -38,6 +53,7 @@ const (
 	EnqueueCommandResultInvalidCommand EnqueueCommandResultCode = "invalid_command"
 	EnqueueCommandResultQueueFull      EnqueueCommandResultCode = "queue_full"
 	EnqueueCommandResultUnitNotFound   EnqueueCommandResultCode = "unit_not_found"
+	EnqueueCommandResultWrongUnitKind  EnqueueCommandResultCode = "wrong_unit_kind"
 )
 
 type EnqueueCommandResult struct {
@@ -47,26 +63,123 @@ type EnqueueCommandResult struct {
 	QueueLimit  int
 }
 
-type World struct {
-	mu            sync.RWMutex
-	Grid          [GridSize][GridSize]*Unit
-	Units         map[string]*Unit
-	Tick          int64
-	rng           *rand.Rand
-	LastActions   []ActionEvent
+type Tile struct {
+	Kind             TileKind
+	NextFoodSpawnTick int64
 }
 
 type ActionEvent struct {
-	UnitID string
-	Action string
-	X      int
-	Y      int
+	UnitID         string
+	Action         string
+	X              int
+	Y              int
+	StackLevel     int
+	TargetX        int
+	TargetY        int
+	TargetStackLevel int
+}
+
+type DeathEvent struct {
+	UnitID     string
+	Kind       UnitKind
+	GridX      int
+	GridY      int
+	StackLevel int
+	Model      string
+}
+
+type World struct {
+	mu          sync.RWMutex
+	Tiles       [GridSize][GridSize]Tile
+	Stacks      [GridSize][GridSize][MaxStackLevels]*Unit
+	Units       map[string]*Unit
+	Tick        int64
+	rng         *rand.Rand
+	LastActions []ActionEvent
+	LastDeaths  []DeathEvent
+}
+
+type moveIntent struct {
+	unit       *Unit
+	carried    *Unit
+	command    string
+	targetX    int
+	targetY    int
+	payload    int
 }
 
 func NewWorld() *World {
-	return &World{
+	w := &World{
 		Units: make(map[string]*Unit),
 		rng:   rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+	w.initializeTiles()
+	return w
+}
+
+func (w *World) initializeTiles() {
+	for x := 0; x < GridSize; x++ {
+		for y := 0; y < GridSize; y++ {
+			roll := w.rng.Intn(10)
+			kind := TileKindNormal
+			switch {
+			case roll == 0:
+				kind = TileKindObstacle
+			case roll <= 2:
+				kind = TileKindFertile
+			}
+
+			tile := Tile{Kind: kind, NextFoodSpawnTick: FoodGrowthInterval + int64(w.rng.Intn(3))}
+			w.Tiles[x][y] = tile
+			if kind == TileKindObstacle {
+				bottom := NewObstacleUnit(uuid.NewString(), x, y, 0)
+				top := NewObstacleUnit(uuid.NewString(), x, y, 1)
+				w.placeUnit(bottom, x, y, 0)
+				w.placeUnit(top, x, y, 1)
+				continue
+			}
+			if kind == TileKindFertile && w.rng.Intn(2) == 1 {
+				food := NewFoodUnit(uuid.NewString(), x, y, 0, foodModels[w.rng.Intn(len(foodModels))])
+				w.placeUnit(food, x, y, 0)
+			}
+		}
+	}
+}
+
+func (w *World) placeUnit(unit *Unit, x, y, stackLevel int) {
+	unit.GridX = x
+	unit.GridY = y
+	unit.StackLevel = stackLevel
+	w.Stacks[x][y][stackLevel] = unit
+	w.Units[unit.ID] = unit
+}
+
+func (w *World) removeUnitFromStack(unit *Unit) {
+	if unit == nil {
+		return
+	}
+	if unit.GridX >= 0 && unit.GridX < GridSize && unit.GridY >= 0 && unit.GridY < GridSize && unit.StackLevel >= 0 && unit.StackLevel < MaxStackLevels {
+		if w.Stacks[unit.GridX][unit.GridY][unit.StackLevel] == unit {
+			w.Stacks[unit.GridX][unit.GridY][unit.StackLevel] = nil
+		}
+	}
+}
+
+func (w *World) getStackCount(x, y int) int {
+	count := 0
+	for level := 0; level < MaxStackLevels; level++ {
+		if w.Stacks[x][y][level] != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func (w *World) normalizeTile(x, y int) {
+	if w.Stacks[x][y][0] == nil && w.Stacks[x][y][1] != nil {
+		w.Stacks[x][y][0] = w.Stacks[x][y][1]
+		w.Stacks[x][y][1] = nil
+		w.Stacks[x][y][0].StackLevel = 0
 	}
 }
 
@@ -74,45 +187,51 @@ func (w *World) SpawnUnit(id, name string) (*Unit, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if len(w.Units) >= MaxPlayers {
+	playerCount := 0
+	for _, unit := range w.Units {
+		if unit.Kind == UnitKindPlayer {
+			playerCount++
+		}
+	}
+	if playerCount >= MaxPlayers {
 		return nil, fmt.Errorf("world full")
 	}
 
-	// Find random empty cell
 	attempts := 0
-	for attempts < 100 {
+	for attempts < 500 {
 		x := w.rng.Intn(GridSize)
 		y := w.rng.Intn(GridSize)
-		if w.Grid[x][y] == nil {
-			// Select model with minimal duplication
-			model := w.selectLeastUsedModel()
-			unit := NewUnit(id, name, model, x, y)
-			w.Units[id] = unit
-			w.Grid[x][y] = unit
-			log.Printf("Unit %s spawned with model %s at (%d, %d)\n", name, model, x, y)
+		if w.Tiles[x][y].Kind == TileKindObstacle {
+			attempts++
+			continue
+		}
+
+		count := w.getStackCount(x, y)
+		if count < MaxStackLevels {
+			model := w.selectLeastUsedPlayerModel()
+			unit := NewPlayerUnit(id, name, model, x, y, count)
+			w.placeUnit(unit, x, y, count)
+			log.Printf("Unit %s spawned with model %s at (%d, %d, %d)\n", name, model, x, y, count)
 			return unit, nil
 		}
 		attempts++
 	}
 
-	return nil, fmt.Errorf("no empty cells")
+	return nil, fmt.Errorf("no available stack slot")
 }
 
-func (w *World) selectLeastUsedModel() string {
-	// Count model usage
+func (w *World) selectLeastUsedPlayerModel() string {
 	modelCounts := make(map[string]int)
 	for _, model := range availableModels {
 		modelCounts[model] = 0
 	}
-
 	for _, unit := range w.Units {
-		modelCounts[unit.Model]++
+		if unit.Kind == UnitKindPlayer {
+			modelCounts[unit.Model]++
+		}
 	}
-
-	// Find models with minimum usage
 	minCount := len(w.Units) + 1
 	var leastUsed []string
-
 	for _, model := range availableModels {
 		count := modelCounts[model]
 		if count < minCount {
@@ -122,24 +241,22 @@ func (w *World) selectLeastUsedModel() string {
 			leastUsed = append(leastUsed, model)
 		}
 	}
-
-	// Randomly select from least used models
 	if len(leastUsed) > 0 {
 		return leastUsed[w.rng.Intn(len(leastUsed))]
 	}
-
-	// Fallback to random model
 	return availableModels[w.rng.Intn(len(availableModels))]
 }
 
 func (w *World) RemoveUnit(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	if unit, ok := w.Units[id]; ok {
-		w.Grid[unit.X][unit.Y] = nil
-		delete(w.Units, id)
+	unit, ok := w.Units[id]
+	if !ok {
+		return
 	}
+	w.removeUnitFromStack(unit)
+	delete(w.Units, id)
+	w.normalizeTile(unit.GridX, unit.GridY)
 }
 
 func (w *World) ProcessTick() {
@@ -147,101 +264,114 @@ func (w *World) ProcessTick() {
 	defer w.mu.Unlock()
 
 	w.Tick++
-	w.LastActions = []ActionEvent{} // Clear previous actions
+	w.LastActions = []ActionEvent{}
+	w.LastDeaths = []DeathEvent{}
+	w.restoreObstacleHP()
+	w.processMovementPhase()
+	w.normalizeAllTiles()
+	w.processAttackPhase()
+	w.normalizeAllTiles()
+	w.spawnFoodOnFertileTiles()
+}
 
-	// Phase 1: Process move commands (highest priority)
-	moveIntents := make(map[string][2]int) // unit_id -> [newX, newY]
-	cellTargets := make(map[[2]int][]string) // [x,y] -> []unit_ids trying to move there
-	moveCommands := make(map[string]string) // unit_id -> command
+func (w *World) restoreObstacleHP() {
+	for _, unit := range w.Units {
+		if unit.Kind == UnitKindObstacle {
+			unit.HP = ObstacleHP
+		}
+	}
+}
+
+func (w *World) processMovementPhase() {
+	moveIntents := make(map[string]moveIntent)
+	cellTargets := make(map[[2]int][]string)
 
 	for id, unit := range w.Units {
-		if len(unit.ActionQueue) == 0 {
+		if !unit.CanMove() || len(unit.ActionQueue) == 0 {
 			continue
 		}
-
+		if unit.StackLevel == 1 {
+			below := w.Stacks[unit.GridX][unit.GridY][0]
+			if below == nil || below.Kind != UnitKindFood {
+				continue
+			}
+		} else if unit.StackLevel != 0 {
+			continue
+		}
 		cmd := unit.ActionQueue[0]
-		if !isMoveCommand(cmd) {
+		if !isMoveCommand(cmd) || unit.Qi < 1 {
 			continue
 		}
-
-		if unit.Qi < 1 {
-			continue
-		}
-
-		newX, newY := unit.X, unit.Y
+		targetX, targetY := unit.GridX, unit.GridY
 		switch cmd {
 		case "move_up":
-			newY--
+			targetY--
 		case "move_down":
-			newY++
+			targetY++
 		case "move_left":
-			newX--
+			targetX--
 		case "move_right":
-			newX++
+			targetX++
 		}
-
-		if newX < 0 || newX >= GridSize || newY < 0 || newY >= GridSize {
+		if targetX < 0 || targetX >= GridSize || targetY < 0 || targetY >= GridSize {
 			unit.ActionQueue = unit.ActionQueue[1:]
 			continue
 		}
-
-		moveIntents[id] = [2]int{newX, newY}
-		moveCommands[id] = cmd
-		key := [2]int{newX, newY}
-		cellTargets[key] = append(cellTargets[key], id)
+		carried := w.Stacks[unit.GridX][unit.GridY][1]
+		payload := 1
+		if carried != nil && carried != unit {
+			payload = 2
+		}
+		moveIntents[id] = moveIntent{unit: unit, carried: carried, command: cmd, targetX: targetX, targetY: targetY, payload: payload}
+		cellTargets[[2]int{targetX, targetY}] = append(cellTargets[[2]int{targetX, targetY}], id)
 	}
 
-	// Resolve move collisions
-	for id, target := range moveIntents {
-		unit := w.Units[id]
-		cmd := moveCommands[id]
-		newX, newY := target[0], target[1]
-		key := [2]int{newX, newY}
+	for id, intent := range moveIntents {
+		collision := len(cellTargets[[2]int{intent.targetX, intent.targetY}]) > 1
+		destinationCount := w.getStackCount(intent.targetX, intent.targetY)
+		obstacleTile := w.Tiles[intent.targetX][intent.targetY].Kind == TileKindObstacle
+		if collision || obstacleTile || destinationCount+intent.payload > MaxStackLevels {
+			intent.unit.Qi--
+			intent.unit.ActionQueue = intent.unit.ActionQueue[1:]
+			log.Printf("Unit %s move failed (collision=%v obstacleTile=%v destinationCount=%d payload=%d)\n", intent.unit.Name, collision, obstacleTile, destinationCount, intent.payload)
+			continue
+		}
 
-		// Check if cell is occupied or multiple units trying to move there
-		occupied := w.Grid[newX][newY] != nil
-		collision := len(cellTargets[key]) > 1
+		originX, originY := intent.unit.GridX, intent.unit.GridY
+		originLevel := intent.unit.StackLevel
+		w.Stacks[originX][originY][originLevel] = nil
+		if intent.carried != nil && intent.carried != intent.unit {
+			w.Stacks[originX][originY][1] = nil
+		}
 
-		if occupied || collision {
-			// Move fails, consume qi
-			unit.Qi--
-			unit.ActionQueue = unit.ActionQueue[1:]
-			log.Printf("Unit %s move failed (occupied=%v, collision=%v)\n", unit.Name, occupied, collision)
+		if destinationCount == 0 {
+			w.placeUnit(intent.unit, intent.targetX, intent.targetY, 0)
+			if intent.carried != nil && intent.carried != intent.unit {
+				w.placeUnit(intent.carried, intent.targetX, intent.targetY, 1)
+			}
 		} else {
-			// Move succeeds
-			w.Grid[unit.X][unit.Y] = nil
-			unit.X, unit.Y = newX, newY
-			w.Grid[newX][newY] = unit
-			unit.Qi--
-			unit.ActionQueue = unit.ActionQueue[1:]
+			w.placeUnit(intent.unit, intent.targetX, intent.targetY, 1)
+		}
 
-			// Record action event
-			w.LastActions = append(w.LastActions, ActionEvent{
-				UnitID: id,
-				Action: cmd,
-				X:      newX,
-				Y:      newY,
-			})
-			log.Printf("Unit %s executed %s to (%d, %d)\n", unit.Name, cmd, newX, newY)
+		intent.unit.Qi--
+		intent.unit.ActionQueue = intent.unit.ActionQueue[1:]
+		w.LastActions = append(w.LastActions, ActionEvent{UnitID: id, Action: intent.command, X: originX, Y: originY, StackLevel: originLevel, TargetX: intent.targetX, TargetY: intent.targetY, TargetStackLevel: intent.unit.StackLevel})
+		if intent.carried != nil && intent.carried != intent.unit {
+			w.LastActions = append(w.LastActions, ActionEvent{UnitID: intent.carried.ID, Action: "carried_" + intent.command, X: originX, Y: originY, StackLevel: 1, TargetX: intent.targetX, TargetY: intent.targetY, TargetStackLevel: intent.carried.StackLevel})
 		}
 	}
+}
 
-	// Phase 2: Process attack commands (lowest priority)
+func (w *World) processAttackPhase() {
 	for _, unit := range w.Units {
-		if len(unit.ActionQueue) == 0 {
+		if !unit.CanAttack() || len(unit.ActionQueue) == 0 {
 			continue
 		}
-
 		cmd := unit.ActionQueue[0]
-		if !isAttackCommand(cmd) {
+		if !isAttackCommand(cmd) || unit.Qi < 2 {
 			continue
 		}
-
-		if unit.Qi < 2 {
-			continue
-		}
-
-		targetX, targetY := unit.X, unit.Y
+		targetX, targetY := unit.GridX, unit.GridY
 		switch cmd {
 		case "attack_up":
 			targetY--
@@ -252,37 +382,54 @@ func (w *World) ProcessTick() {
 		case "attack_right":
 			targetX++
 		}
-
-		// Consume qi regardless
 		unit.Qi -= 2
 		unit.ActionQueue = unit.ActionQueue[1:]
-
-		// Record attack action
-		w.LastActions = append(w.LastActions, ActionEvent{
-			UnitID: unit.ID,
-			Action: cmd,
-			X:      unit.X,
-			Y:      unit.Y,
-		})
-
+		targetLevel := 0
 		if targetX < 0 || targetX >= GridSize || targetY < 0 || targetY >= GridSize {
-			log.Printf("Unit %s executed %s (missed - out of bounds)\n", unit.Name, cmd)
+			w.LastActions = append(w.LastActions, ActionEvent{UnitID: unit.ID, Action: cmd, X: unit.GridX, Y: unit.GridY, StackLevel: unit.StackLevel, TargetX: targetX, TargetY: targetY, TargetStackLevel: targetLevel})
 			continue
 		}
+		target := w.Stacks[targetX][targetY][1]
+		targetLevel = 1
+		if target == nil {
+			target = w.Stacks[targetX][targetY][0]
+			targetLevel = 0
+		}
+		w.LastActions = append(w.LastActions, ActionEvent{UnitID: unit.ID, Action: cmd, X: unit.GridX, Y: unit.GridY, StackLevel: unit.StackLevel, TargetX: targetX, TargetY: targetY, TargetStackLevel: targetLevel})
+		if target == nil {
+			continue
+		}
+		target.HP -= unit.Attack
+		if target.HP <= 0 {
+			w.LastDeaths = append(w.LastDeaths, DeathEvent{UnitID: target.ID, Kind: target.Kind, GridX: target.GridX, GridY: target.GridY, StackLevel: target.StackLevel, Model: target.Model})
+			w.removeUnitFromStack(target)
+			delete(w.Units, target.ID)
+			w.normalizeTile(targetX, targetY)
+		}
+	}
+}
 
-		target := w.Grid[targetX][targetY]
-		if target != nil {
-			target.HP -= unit.Attack
-			log.Printf("Unit %s executed %s, hit %s for %d damage (HP: %d -> %d)\n",
-				unit.Name, cmd, target.Name, unit.Attack, target.HP+unit.Attack, target.HP)
-
-			if target.HP <= 0 {
-				w.Grid[targetX][targetY] = nil
-				delete(w.Units, target.ID)
-				log.Printf("Unit %s was destroyed\n", target.Name)
+func (w *World) spawnFoodOnFertileTiles() {
+	for x := 0; x < GridSize; x++ {
+		for y := 0; y < GridSize; y++ {
+			tile := &w.Tiles[x][y]
+			if tile.Kind != TileKindFertile || w.Tick < tile.NextFoodSpawnTick {
+				continue
 			}
-		} else {
-			log.Printf("Unit %s executed %s (missed - no target)\n", unit.Name, cmd)
+			count := w.getStackCount(x, y)
+			if count < MaxStackLevels {
+				food := NewFoodUnit(uuid.NewString(), x, y, count, foodModels[w.rng.Intn(len(foodModels))])
+				w.placeUnit(food, x, y, count)
+			}
+			tile.NextFoodSpawnTick = w.Tick + FoodGrowthInterval + int64(w.rng.Intn(3))
+		}
+	}
+}
+
+func (w *World) normalizeAllTiles() {
+	for x := 0; x < GridSize; x++ {
+		for y := 0; y < GridSize; y++ {
+			w.normalizeTile(x, y)
 		}
 	}
 }
@@ -290,9 +437,8 @@ func (w *World) ProcessTick() {
 func (w *World) RegenerateQi() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	for _, unit := range w.Units {
-		if unit.Qi < 10 {
+		if unit.Kind == UnitKindPlayer && unit.Qi < 10 {
 			unit.Qi++
 		}
 	}
@@ -310,21 +456,9 @@ func (w *World) EnqueueCommandForUnit(unitID, cmd string) EnqueueCommandResult {
 	w.mu.RLock()
 	unit, ok := w.Units[unitID]
 	w.mu.RUnlock()
-
 	if !ok {
-		return EnqueueCommandResult{
-			Accepted:    false,
-			Code:        EnqueueCommandResultUnitNotFound,
-			QueueLength: 0,
-			QueueLimit:  MaxActionQueueLength,
-		}
+		return EnqueueCommandResult{Accepted: false, Code: EnqueueCommandResultUnitNotFound, QueueLength: 0, QueueLimit: MaxActionQueueLength}
 	}
-
 	result := unit.EnqueueCommand(cmd)
-	return EnqueueCommandResult{
-		Accepted:    result.Accepted,
-		Code:        EnqueueCommandResultCode(result.Code),
-		QueueLength: result.QueueLength,
-		QueueLimit:  result.QueueLimit,
-	}
+	return EnqueueCommandResult{Accepted: result.Accepted, Code: EnqueueCommandResultCode(result.Code), QueueLength: result.QueueLength, QueueLimit: result.QueueLimit}
 }

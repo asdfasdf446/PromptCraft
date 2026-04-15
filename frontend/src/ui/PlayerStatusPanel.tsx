@@ -7,28 +7,11 @@ export default function PlayerStatusPanel() {
   createEffect(() => {
     const state = worldState();
     const myUnitId = sessionStorage.getItem('myUnitId');
-    console.log('[PlayerStatusPanel] 🔍 Reading myUnitId from sessionStorage (tab-local):', myUnitId);
-
-    console.log('[PlayerStatusPanel] Update triggered:', {
-      hasState: !!state,
-      myUnitId: myUnitId,
-      unitCount: state?.units.length || 0
-    });
 
     if (state && myUnitId) {
-      const unit = state.units.find(u => u.id === myUnitId);
-
-      if (unit) {
-        console.log('[PlayerStatusPanel] ✅ Found my unit:', unit);
-        setMyUnit(unit);
-      } else {
-        console.warn('[PlayerStatusPanel] ⚠️ My unit not found in state. Available units:',
-          state.units.map(u => ({ id: u.id, name: u.name }))
-        );
-        setMyUnit(null);
-      }
+      const unit = state.units.find(u => u.id === myUnitId && u.kind === 'player');
+      setMyUnit(unit ?? null);
     } else {
-      console.log('[PlayerStatusPanel] ⏳ Waiting for state or unit ID');
       setMyUnit(null);
     }
   });
@@ -54,9 +37,10 @@ export default function PlayerStatusPanel() {
             {myUnit().name}
           </div>
           <div style={{ 'line-height': '1.6' }}>
-            <div><strong>Position:</strong> ({myUnit().x}, {myUnit().y})</div>
+            <div><strong>Kind:</strong> {myUnit().kind}</div>
+            <div><strong>Position:</strong> ({myUnit().grid_x}, {myUnit().grid_y}, level {myUnit().stack_level})</div>
             <div><strong>HP:</strong> <span style={{ color: myUnit().hp > 5 ? '#4ade80' : '#ef4444' }}>{myUnit().hp}</span> / 10</div>
-            <div><strong>Qi:</strong> <span style={{ color: myUnit().qi >= 2 ? '#4ade80' : '#fbbf24' }}>{myUnit().qi}</span> / 10</div>
+            <div><strong>Qi:</strong> <span style={{ color: (myUnit().qi ?? 0) >= 2 ? '#4ade80' : '#fbbf24' }}>{myUnit().qi ?? 0}</span> / 10</div>
             <div style={{ 'margin-top': '10px', 'padding-top': '10px', 'border-top': '1px solid #4a4a4a' }}>
               <strong>Action Queue:</strong>
               {myUnit().action_queue.length === 0 ? (

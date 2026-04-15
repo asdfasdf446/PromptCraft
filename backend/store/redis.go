@@ -26,15 +26,17 @@ func unitQueueKey(unitID string) string {
 func WriteUnit(rdb *redis.Client, unit *game.Unit, uid, role string) error {
 	ctx := context.Background()
 	key := unitStateKey(unit.ID)
-	err := rdb.HSet(ctx, key, map[string]interface{}{
-		"hp":    unit.HP,
-		"qi":    unit.Qi,
-		"x":     unit.X,
-		"y":     unit.Y,
-		"model": unit.Model,
-		"name":  unit.Name,
-		"uid":   uid,
-		"role":  role,
+	 err := rdb.HSet(ctx, key, map[string]interface{}{
+		"hp":          unit.HP,
+		"qi":          unit.Qi,
+		"grid_x":      unit.GridX,
+		"grid_y":      unit.GridY,
+		"stack_level": unit.StackLevel,
+		"kind":        unit.Kind,
+		"model":       unit.Model,
+		"name":        unit.Name,
+		"uid":         uid,
+		"role":        role,
 	}).Err()
 	if err != nil {
 		return err

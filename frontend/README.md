@@ -1,6 +1,6 @@
 # Frontend — PromptCraft
 
-SolidJS + Babylon.js frontend for PromptCraft. Renders the 3D game world and provides the command interface.
+SolidJS + Babylon.js frontend for PromptCraft. Renders the authoritative tile-aware world state from the backend and provides the command interface.
 
 ---
 
@@ -26,7 +26,7 @@ frontend/src/
 ├── ui/
 │   ├── CommandInput.tsx        # Command input with batch support
 │   ├── PlayerStatusPanel.tsx   # Fixed panel (HP, Qi, position, queue)
-│   ├── UnitPanel.tsx           # Modal for inspecting other units
+│   ├── UnitPanel.tsx           # Modal for inspecting units
 │   └── SystemClock.tsx         # Tick counter, countdown, event log
 └── network/
     └── WebSocketClient.ts      # WebSocket client, reactive state
@@ -36,21 +36,49 @@ frontend/src/
 
 ## State Management
 
-Uses SolidJS reactive signals for world state:
+Uses SolidJS reactive signals for authoritative world state:
 
 ```typescript
-// WebSocketClient.ts
 const [worldState, setWorldState] = createSignal<WorldState | null>(null);
 export { worldState };
-
-// Components subscribe reactively
-const state = worldState();  // Auto-updates when state changes
 ```
 
 **Data flow**:
 1. WebSocket message → `setWorldState(data)`
-2. `createEffect()` in `BabylonScene.tsx` → update 3D meshes
+2. `createEffect()` in `BabylonScene.tsx` → create/update/remove tile and unit meshes
 3. UI components read `worldState()` → auto-render
+
+---
+
+## World Schema
+
+The frontend consumes server-authored terrain and stacked unit data:
+
+```typescript
+interface TileState {
+  grid_x: number;
+  grid_y: number;
+  kind: 'normal' | 'fertile' | 'obstacle';
+}
+
+interface UnitState {
+  id: string;
+  kind: 'player' | 'food' | 'obstacle';
+  grid_x: number;
+  grid_y: number;
+  stack_level: number;
+  hp: number;
+  qi?: number;
+  name: string;
+  model: string;
+  action_queue: string[];
+}
+```
+
+Babylon coordinate mapping:
+- `grid_x` → Babylon X
+- `grid_y` → Babylon Z
+- `stack_level` → Babylon Y offset
 
 ---
 
@@ -61,46 +89,33 @@ const state = worldState();  // Auto-updates when state changes
 - **Engine**: Babylon.js WebGL2 with `adaptToDeviceRatio`
 - **Camera**: `ArcRotateCamera` — top-down view, pan/zoom enabled
   - Radius: 20–80 units, Beta: 0.1–π/2.5
-- **Light**: `HemisphericLight` at intensity 0.8
+- **Lighting**: hemispheric light plus a directional sun/day-night cycle
 
-### Terrain Generation
+### Terrain Rendering
 
-Weighted procedural tile selection using position-based seeding:
+Terrain is driven entirely by backend tile kinds:
 
-```typescript
-const selectTileModel = (x: number, z: number): string => {
-  const seed = x * 31 + z * 17;
-  const random = (Math.abs(Math.sin(seed)) * 10000) % 100;
-  // Weighted selection from tileModels array
-};
-```
+- `normal` → dirt/path ground model
+- `fertile` → grass ground model with food stacks growing over time
+- `obstacle` → blocked terrain whose obstacle occupants stay hidden unless wireframe mode is enabled
 
-Tiles loaded via `SceneLoader.ImportMesh` from `/assets/models/nature/`.
+Tiles are keyed by `grid_x/grid_y` and diffed against the latest world state.
 
-### Character Models
+### Unit Rendering
 
-Models loaded from `/assets/models/animals/`. Critical: base path must include the subdirectory for texture resolution:
+Units render by kind:
 
-```typescript
-const modelPath = unit.model.split('/');
-const modelFile = modelPath.pop();
-const basePath = `/assets/models/${modelPath.join('/')}/`;
-// basePath = "/assets/models/animals/" — textures resolve correctly
-```
+- **player** → animal `.glb` models
+- **food** → plant/nature models
+- **obstacle** → wireframe box meshes
 
-Fallback to colored box if model fails to load.
+Stacked units are vertically separated with a constant stack height so both layers remain visible.
 
-### Grid Borders
+### Interaction
 
-Thin planes (0.05 units wide) at cell edges, elevated to y=0.01 to prevent z-fighting.
-
-### Player Indicator
-
-Yellow cone arrow above player's unit with bobbing animation (`Math.sin(time * 2) * 0.2`).
-
-### Action Icons
-
-Floating emoji icons appear at action locations, fade out over 3 seconds.
+- Clicking a unit mesh opens `UnitPanel`
+- The local player gets a yellow hovering arrow indicator
+- Tick action icons are placed using target coordinates plus `target_stack_level`
 
 ---
 
@@ -109,40 +124,38 @@ Floating emoji icons appear at action locations, fade out over 3 seconds.
 ### `CommandInput.tsx`
 
 - Text input for commands
-- Batch support: `move_up;move_right;attack_down` queues 3 commands
-- Client-side validation against valid command list
-- Visual feedback: green (success) / red (error) notification, auto-dismisses after 3s
+- Batch support: `move_up;move_right;attack_down`
+- Waits for backend `command_result` feedback before treating submissions as accepted/rejected
 
 ### `PlayerStatusPanel.tsx`
 
-- Fixed panel showing player's HP, Qi, position, action queue
-- Reads `worldState()` and `localStorage.getItem('myUnitId')`
-- Updates reactively on every world state change
+- Tracks only the authenticated local **player** unit
+- Shows HP, qi, stacked position, and current action queue
 
 ### `UnitPanel.tsx`
 
-- Modal dialog for inspecting other units
-- Opens on click of any unit mesh in 3D scene
-- Shows HP, Qi, position, action queue
+- Modal dialog for inspecting any unit kind
+- Shows ID, kind, stacked position, HP, and player-only qi details
+- Hides action queues for other players
 
 ### `SystemClock.tsx`
 
 - Tick counter and elapsed time
 - Countdown to next tick (5s)
-- Event log: last 5 tick events with timestamps
+- Event log for recent tick actions
 
 ---
 
 ## WebSocket Client (`WebSocketClient.ts`)
 
 - Auto-connects on load, auto-reconnects on disconnect (3s delay)
-- Clears `myUnitId` from localStorage on new connection (prevents stale ID)
-- Stores player's unit ID in `localStorage.myUnitId`
-- Comprehensive debug logging with emoji prefixes
+- Sends auth handshake first after opening the socket
+- Stores the local player unit ID in session storage
+- Handles `auth_ok`, `command_result`, and shared world-state payloads
 
 **Exported API**:
 ```typescript
-export { worldState }           // SolidJS signal
+export { worldState }
 export function connectWebSocket(): void
 export function sendCommand(command: string, unitId: string): void
 ```
@@ -153,26 +166,26 @@ export function sendCommand(command: string, unitId: string): void
 
 ### Model Paths
 
-- Character models: `/assets/models/animals/<name>.glb`
-- Terrain models: `/assets/models/nature/<name>.glb`
-- Textures: `/assets/models/animals/Textures/colormap.png`
+- Player models: `/assets/models/animals/<name>.glb`
+- Terrain/food models: `/assets/models/nature/<name>.glb`
+- Animal textures: `/assets/models/animals/Textures/colormap.png`
 
 ### Adding New Models
 
-1. Place `.glb` file in appropriate directory under `public/assets/models/`
-2. For character models: update `availableModels` in `backend/game/world.go`
-3. For terrain tiles: update `tileModels` array in `BabylonScene.tsx`
-4. Document in `ASSETS.md`
+1. Place the `.glb` file under `public/assets/models/`
+2. Update backend model assignment/spawn logic if it affects player or food units
+3. Update `BabylonScene.tsx` if a new tile or unit kind needs custom rendering
+4. Document it in `ASSETS.md`
 
 ---
 
 ## Development Notes
 
-- **Dev server** (`npm run dev`): Hot reload, proxies WebSocket to backend
-- **Production build** (`npm run build`): Outputs to `dist/`, served by Go backend
-- **Command feedback**: The UI now waits for backend `command_result` acknowledgements before presenting queue success/failure
-- **TypeScript**: Strict mode enabled
-- **Vite**: Build tool and dev server
+- **Dev server** (`npm run dev`): Hot reload for frontend work
+- **Production build** (`npm run build`): Outputs to `dist/`, then served by Go backend
+- **Command feedback**: UI uses backend `command_result` acknowledgements
+- **Authoritative terrain**: The frontend no longer invents terrain locally
+- **Stacked world**: UI and scene logic must tolerate non-player units and two-layer occupancy
 
 ---
 
@@ -180,14 +193,13 @@ export function sendCommand(command: string, unitId: string): void
 
 **Models not loading (404)**:
 - Verify files exist in `public/assets/models/`
-- Check browser Network tab for exact failing URL
+- Check browser Network tab for the failing URL
 - Ensure `Textures/colormap.png` exists for animal models
 
-**UI not updating**:
-- Check WebSocket connection in browser console
-- Verify `worldState` signal is being read reactively (not stored in variable)
+**Wrong unit highlighted as local player**:
+- Ensure the latest `auth_ok.unit_id` reached the client
+- Clear stale session storage if testing with old tabs
 
-**Build errors**:
-```bash
-npm run build 2>&1 | head -50
-```
+**UI not updating**:
+- Check the WebSocket connection in the browser console
+- Verify the incoming payload has both `tiles` and `units`

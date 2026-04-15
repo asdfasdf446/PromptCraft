@@ -4,22 +4,69 @@ package game;
 
 option go_package = "promptcraft/backend/proto";
 
+message ClientAuth {
+  string type = 1;
+  string token = 2;
+}
+
 message ClientCommand {
-  string command = 1;
+  string type = 1;
+  string request_id = 2;
+  string command = 3;
+  string unit_id = 4;
+}
+
+message CommandResult {
+  string type = 1;
+  string request_id = 2;
+  string unit_id = 3;
+  string command = 4;
+  string status = 5;
+  string code = 6;
+  string message = 7;
+  int32 queue_length = 8;
+  int32 queue_limit = 9;
+  int64 tick = 10;
+}
+
+message AuthOk {
+  string type = 1;
   string unit_id = 2;
+}
+
+message TileState {
+  int32 grid_x = 1;
+  int32 grid_y = 2;
+  string kind = 3;
 }
 
 message UnitState {
   string id = 1;
-  int32 x = 2;
-  int32 y = 3;
-  int32 hp = 4;
-  int32 qi = 5;
-  string name = 6;
-  repeated string action_queue = 7;
+  string kind = 2;
+  int32 grid_x = 3;
+  int32 grid_y = 4;
+  int32 stack_level = 5;
+  int32 hp = 6;
+  int32 qi = 7;
+  string name = 8;
+  string model = 9;
+  repeated string action_queue = 10;
+}
+
+message ActionEvent {
+  string unit_id = 1;
+  string action = 2;
+  int32 x = 3;
+  int32 y = 4;
+  int32 stack_level = 5;
+  int32 target_x = 6;
+  int32 target_y = 7;
+  int32 target_stack_level = 8;
 }
 
 message ServerWorldState {
-  repeated UnitState units = 1;
-  int64 tick = 2;
+  repeated TileState tiles = 1;
+  repeated UnitState units = 2;
+  int64 tick = 3;
+  repeated ActionEvent actions = 4;
 }

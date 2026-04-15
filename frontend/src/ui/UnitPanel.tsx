@@ -7,6 +7,7 @@ interface Props {
 
 export default function UnitPanel(props: Props) {
   const isMyUnit = () => props.unit.id === sessionStorage.getItem('myUnitId');
+  const isPlayer = () => props.unit.kind === 'player';
 
   return (
     <div style={{
@@ -39,11 +40,12 @@ export default function UnitPanel(props: Props) {
 
       <div style={{ 'font-family': 'Courier New, monospace', 'font-size': '14px', 'line-height': '1.6' }}>
         <div><strong>ID:</strong> {props.unit.id.slice(0, 8)}</div>
-        <div><strong>Position:</strong> ({props.unit.x}, {props.unit.y})</div>
-        <div><strong>HP:</strong> {props.unit.hp} / 10</div>
-        <div><strong>Qi:</strong> {props.unit.qi} / 10</div>
+        <div><strong>Kind:</strong> {props.unit.kind}</div>
+        <div><strong>Position:</strong> ({props.unit.grid_x}, {props.unit.grid_y}, level {props.unit.stack_level})</div>
+        <div><strong>HP:</strong> {props.unit.hp}</div>
+        {isPlayer() && <div><strong>Qi:</strong> {props.unit.qi ?? 0} / 10</div>}
 
-        {isMyUnit() && (
+        {isMyUnit() && isPlayer() && (
           <div style={{ 'margin-top': '10px' }}>
             <strong>Action Queue:</strong>
             {props.unit.action_queue.length === 0 ? (
@@ -58,7 +60,7 @@ export default function UnitPanel(props: Props) {
           </div>
         )}
 
-        {!isMyUnit() && (
+        {!isMyUnit() && isPlayer() && (
           <div style={{ 'margin-top': '10px', color: '#888', 'font-style': 'italic' }}>
             Action queue hidden for other players
           </div>

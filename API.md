@@ -10,8 +10,8 @@ PromptCraft provides:
 - **HTTP API**: User registration, login, and guest token issuance
 - **WebSocket API**: Real-time game control with JWT authentication
 
-**Base URL**: `http://[server-ip]:8080`
-**WebSocket Endpoint**: `ws://[server-ip]:8080/ws`
+**Base URL**: `http://[server-ip]:8081`
+**WebSocket Endpoint**: `ws://[server-ip]:8081/ws`
 
 ---
 
@@ -285,11 +285,16 @@ ws.run_forever()
 
 ```json
 {
+  "tiles": [
+    { "grid_x": 15, "grid_y": 20, "kind": "fertile" }
+  ],
   "units": [
     {
       "id": "9f43e268-677d-4d22-9bf3-124acf9531b7",
-      "x": 15,
-      "y": 20,
+      "kind": "player",
+      "grid_x": 15,
+      "grid_y": 20,
+      "stack_level": 0,
       "hp": 10,
       "qi": 7,
       "name": "Player-9f43e268",
@@ -303,24 +308,41 @@ ws.run_forever()
       "unit_id": "9f43e268-677d-4d22-9bf3-124acf9531b7",
       "action": "move_up",
       "x": 15,
-      "y": 19
+      "y": 20,
+      "stack_level": 0,
+      "target_x": 15,
+      "target_y": 19,
+      "target_stack_level": 0
     }
   ]
 }
 ```
 
 **Fields**:
-- `units` (array): All active units in the world
-  - `id` (string): Unit UUID
-  - `x` (int): X coordinate (0-29, west to east)
-  - `y` (int): Y coordinate (0-29, north to south)
-  - `hp` (int): Health points (0-10)
-  - `qi` (int): Qi resource (0-10)
-  - `name` (string): Unit display name
-  - `model` (string): 3D model path
-  - `action_queue` (array): Queued commands
+- `tiles` (array): All world tiles with backend-defined terrain kind
+  - `grid_x` (int): Tile x coordinate
+  - `grid_y` (int): Tile y coordinate
+  - `kind` (string): `normal`, `fertile`, or `obstacle`
+- `units` (array): All active entities in the world
+  - `id` (string): Entity UUID
+  - `kind` (string): `player`, `food`, or `obstacle`
+  - `grid_x` (int): X coordinate (0-29, west to east)
+  - `grid_y` (int): Y coordinate (0-29, north to south)
+  - `stack_level` (int): Vertical stack slot on the tile (`0` bottom, `1` top)
+  - `hp` (int): Health points
+  - `qi` (int, optional): Player-only qi resource
+  - `name` (string): Display name
+  - `model` (string): Render model path if applicable
+  - `action_queue` (array): Queued commands for controllable player units
 - `tick` (int): Current world tick number
 - `actions` (array): Actions executed in last tick (optional)
+  - includes origin and target stack metadata for movement/attack visualization
+
+**Terrain and growth rules**:
+- Tile generation uses a `fertile:obstacle:normal` ratio of `2:1:7`
+- Fertile tiles start with either 0 or 1 food layer
+- Fertile tiles attempt to grow one additional food layer roughly every 10 ticks when stack capacity is available
+- Obstacle tiles are blocked by two obstacle occupants and remain visible to API clients even if the web UI hides them outside wireframe mode
 
 Command acknowledgements indicate whether a submission was accepted into the queue. World-state updates remain the authoritative shared view for later execution results.
 

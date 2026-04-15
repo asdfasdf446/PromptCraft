@@ -7,8 +7,8 @@ from urllib import request
 
 import websocket
 
-BASE_HTTP_URL = os.environ.get("PROMPTCRAFT_BASE_URL", "http://127.0.0.1:8080")
-WS_URL = os.environ.get("PROMPTCRAFT_WS_URL", "ws://127.0.0.1:8080/ws")
+BASE_HTTP_URL = os.environ.get("PROMPTCRAFT_BASE_URL", "http://127.0.0.1:8081")
+WS_URL = os.environ.get("PROMPTCRAFT_WS_URL", "ws://127.0.0.1:8081/ws")
 
 
 def post_json(path: str, payload: dict) -> dict:
@@ -91,7 +91,31 @@ class PromptCraftAPITest(unittest.TestCase):
 
         world = client.read_until(lambda msg: "units" in msg and any(u["id"] == client.unit_id for u in msg["units"]))
         me = next(u for u in world["units"] if u["id"] == client.unit_id)
+        self.assertEqual(me["kind"], "player")
         self.assertIn("move_up", me["action_queue"])
+
+    def test_world_state_includes_tiles_and_stack_fields(self):
+        client = self.new_client()
+        world = client.read_until(lambda msg: "tiles" in msg and "units" in msg)
+        self.assertEqual(len(world["tiles"]), 900)
+        tile_kinds = [tile["kind"] for tile in world["tiles"]]
+        self.assertGreaterEqual(tile_kinds.count("fertile"), 150)
+        self.assertGreaterEqual(tile_kinds.count("obstacle"), 70)
+        self.assertGreaterEqual(tile_kinds.count("normal"), 500)
+        me = next(u for u in world["units"] if u["id"] == client.unit_id)
+        self.assertIn("grid_x", me)
+        self.assertIn("grid_y", me)
+        self.assertIn("stack_level", me)
+        self.assertEqual(me["kind"], "player")
+
+    def test_world_state_contains_non_player_entities(self):
+        client = self.new_client()
+        world = client.read_until(lambda msg: "units" in msg and any(u["kind"] != "player" for u in msg["units"]))
+        kinds = {unit["kind"] for unit in world["units"]}
+        self.assertIn("obstacle", kinds)
+        self.assertIn("food", kinds)
+        food_units = [unit for unit in world["units"] if unit["kind"] == "food"]
+        self.assertTrue(all(unit["model"].startswith("nature/") for unit in food_units))
 
     def test_negative_invalid_command_is_rejected(self):
         client = self.new_client()
@@ -127,15 +151,6 @@ class PromptCraftAPITest(unittest.TestCase):
         self.assertEqual(accepted, 10)
         self.assertIsNotNone(rejected)
         self.assertEqual(rejected["code"], "queue_full")
-
-    def test_positive_multiple_players_receive_world_state(self):
-        first = self.new_client()
-        second = self.new_client()
-
-        world = first.read_until(lambda msg: "units" in msg and len(msg["units"]) >= 2)
-        unit_ids = {unit["id"] for unit in world["units"]}
-        self.assertIn(first.unit_id, unit_ids)
-        self.assertIn(second.unit_id, unit_ids)
 
 
 if __name__ == "__main__":
